@@ -1,0 +1,31 @@
+from functools import lru_cache
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    """集中管理运行配置，并通过环境变量决定模型设置。"""
+
+    app_name: str = "Shop Agent API"
+    database_url: str = "postgresql+asyncpg://shop_agent:change-me@db:5432/shop_agent"
+    llm_api_key: str | None = None
+    llm_model: str | None = None
+    llm_base_url: str | None = None
+    cors_origins: str = "http://localhost:5173"
+
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    @property
+    def cors_origin_list(self) -> list[str]:
+        # Docker 与本地开发可能以逗号分隔的单个字符串传入多个来源。
+        return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
+
+    @property
+    def llm_enabled(self) -> bool:
+        # 仅有模型名称不足以调用服务；缺少密钥时避免意外的外部请求。
+        return bool(self.llm_api_key and self.llm_model)
+
+
+@lru_cache
+def get_settings() -> Settings:
+    return Settings()
