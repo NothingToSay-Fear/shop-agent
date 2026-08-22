@@ -22,6 +22,9 @@ services:
       LLM_API_KEY: ${LLM_API_KEY:-}
       LLM_MODEL: ${LLM_MODEL:-}
       LLM_BASE_URL: ${LLM_BASE_URL:-}
+      LOCAL_EMBEDDING_MODEL_PATH: ${LOCAL_EMBEDDING_MODEL_PATH:-/models/bge-small-zh-v1.5}
+      LOCAL_EMBEDDING_MODEL_ID: ${LOCAL_EMBEDDING_MODEL_ID:-BAAI/bge-small-zh-v1.5}
+      LOCAL_EMBEDDING_DEVICE: ${LOCAL_EMBEDDING_DEVICE:-cpu}
       CORS_ORIGINS: http://localhost:${FRONTEND_PORT:-5173}
     ports:
       - "${API_PORT:-8000}:8000"
@@ -29,6 +32,9 @@ services:
     depends_on:
       db:
         condition: service_healthy
+    volumes:
+      # 模型文件由宿主机手动下载并挂载，容器运行时不请求外部嵌入服务。
+      - ./models:/models:ro
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 10s
@@ -45,6 +51,28 @@ services:
     depends_on:
       api:
         condition: service_healthy
+
+  adminer:
+    image: adminer:4.8.1
+    environment:
+      ADMINER_DEFAULT_SERVER: db
+    ports:
+      - "${ADMINER_PORT:-8081}:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  model-download:
+    build:
+      context: ./backend
+    profiles: ["tools"]
+    environment:
+      LOCAL_EMBEDDING_MODEL_PATH: /models/bge-small-zh-v1.5
+      LOCAL_EMBEDDING_MODEL_ID: ${LOCAL_EMBEDDING_MODEL_ID:-BAAI/bge-small-zh-v1.5}
+    # 该一次性工具服务使用可写挂载；API 服务始终以只读方式读取模型文件。
+    volumes:
+      - ./models:/models
+    command: ["python", "-m", "app.download_embedding_model"]
 
 volumes:
   postgres_data:

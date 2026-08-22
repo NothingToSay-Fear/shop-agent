@@ -8,6 +8,7 @@ from sqlalchemy import select
 
 from app.database import SessionLocal, create_tables
 from app.models import DailyMetric, Product
+from app.services.metric_rag import seed_metric_definitions
 
 DEMO_PRODUCTS = (
     {
@@ -41,10 +42,13 @@ async def seed_demo_data() -> None:
     """仅在没有模拟数据时写入商品和 14 天经营指标，确保重复执行安全。"""
     await create_tables()
     async with SessionLocal() as session:
+        # 指标知识独立于每日数据初始化；旧数据库升级后也能补齐 RAG 检索所需记录。
+        await seed_metric_definitions(session)
         existing_metric = await session.scalar(
             select(DailyMetric.id).where(DailyMetric.source == "demo").limit(1)
         )
         if existing_metric is not None:
+            await session.commit()
             print("模拟经营数据已存在，跳过初始化。")
             return
 

@@ -3,9 +3,10 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import conversations, feedback, metrics, tasks
+from app.api import conversations, metrics, tasks
 from app.config import get_settings
 from app.database import close_database, create_tables
+from app.services.local_embeddings import preload_model
 
 settings = get_settings()
 
@@ -14,6 +15,8 @@ settings = get_settings()
 async def lifespan(_: FastAPI):
     # Docker 会在 Uvicorn 前执行 Alembic；此处也让全新的本地数据库可直接使用。
     await create_tables()
+    # 模型目录已挂载时仅在启动期加载一次；缺失时记录日志，指标 RAG 不提供数据上下文。
+    await preload_model(settings)
     yield
     await close_database()
 
@@ -29,7 +32,6 @@ app.add_middleware(
 )
 app.include_router(conversations.router)
 app.include_router(tasks.router)
-app.include_router(feedback.router)
 app.include_router(metrics.router)
 
 

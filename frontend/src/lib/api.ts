@@ -30,11 +30,6 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ title, source_message_id: sourceMessageId }),
     }),
-  sendFeedback: (messageId: string, feedbackType: "up" | "down") =>
-    request<{ id: string; message: string }>(`/api/messages/${messageId}/feedback`, {
-      method: "POST",
-      body: JSON.stringify({ feedback_type: feedbackType }),
-    }),
   updateTask: (id: string, status: Task["status"]) =>
     request<Task>(`/api/tasks/${id}`, {
       method: "PATCH",

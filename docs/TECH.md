@@ -20,6 +20,34 @@ FastAPI API 服务
         └── 大模型服务（后续按环境配置）
 ```
 
+## 1.1 指标 RAG 查询流程
+
+经营数据查询采用“指标定义检索 + 受控 SQL 模板”的 RAG 方案，不让 LLM 直接生成或执行 SQL：
+
+```text
+用户问题
+  -> 为问题生成嵌入向量（优先使用配置的通用嵌入模型）
+  -> 在 metric_definitions 中与指标名称、描述、别名和向量进行相似度匹配
+  -> 选出相关指标，递归补齐 dependency_codes 中的前置指标
+  -> 只执行前置基础指标对应的受控 SQL 模板
+  -> 计算派生指标，并将最小结果集作为 Agent 上下文
+  -> Agent 基于问题和查询结果生成回答
+```
+
+`metric_definitions` 是指标知识的唯一入口。一条定义包含稳定编码、名称、业务描述、别名、前置指标编码、受控 SQL 模板或受控计算公式、嵌入向量和启用状态。基础指标通过模板查询 `daily_metrics`；如支付转化率、客单价和退款率等派生指标只读取其前置指标的结果后计算。
+
+SQL 模板存储在表中以便维护指标口径，但执行前必须与后端登记的只读模板完全匹配；参数仅允许 `source`、`start_date`、`end_date` 绑定传入。计算公式同样只允许后端登记的公式，禁止对数据库中的文本使用 `eval` 或让模型输出 SQL。
+
+嵌入配置采用手动引入的本地模型。模型文件由宿主机下载并挂载到 API 容器，运行时通过 Sentence Transformers 直接加载，不调用外部 Embeddings API。模型未加载或指标向量未重建时，指标 RAG 不查询数据，并记录明确日志。
+
+| 环境变量 | 是否必填 | 说明 |
+| --- | --- | --- |
+| `LOCAL_EMBEDDING_MODEL_PATH` | 使用本地语义检索时必填 | 容器中的模型目录，默认 `/models/bge-small-zh-v1.5` |
+| `LOCAL_EMBEDDING_MODEL_ID` | 建议填写 | 模型名称或固定版本，用于判断是否需要重建向量 |
+| `LOCAL_EMBEDDING_DEVICE` | 可选 | 推理设备，默认 `cpu` |
+
+当前时间解析支持“最近 7 天”（默认）、“最近 14 天/近 14 天/两周”和“上周”。新增更多时间范围、渠道或商品维度时，应扩展受控参数解析和模板注册表，不能直接把用户输入拼入 SQL。
+
 ## 2. 技术选型
 
 | 层级 | 技术 | 作用 |
@@ -73,10 +101,10 @@ FastAPI API 服务
 | `conversations` | 会话标题及创建、更新时间 |
 | `messages` | 用户与 Agent 消息、回答状态及数据引用 |
 | `tasks` | 由 Agent 建议创建的运营任务 |
-| `feedback` | 消息的点赞、点踩和原因 |
 | `tool_calls` | Agent 工具调用摘要、结果、耗时和错误信息 |
 | `products` | 内置模拟商品资料，后续可替换为真实商品数据源 |
 | `daily_metrics` | 近 14 天按商品和渠道汇总的模拟经营指标 |
+| `metric_definitions` | 指标名称、描述、别名、依赖、受控模板、公式和 RAG 向量缓存 |
 
 ## 5. 配置原则
 
@@ -88,10 +116,11 @@ FastAPI API 服务
 
 ## 6. Docker 部署
 
-Docker Compose 包含三个服务：
+Docker Compose 包含四个服务：
 
 - `frontend`：构建并提供 React 静态页面。
 - `api`：运行 FastAPI 与 Agent 服务。
+- `adminer`：提供浏览器访问的 PostgreSQL 管理界面，仅用于本地查看和排查数据。
 - `db`：运行 PostgreSQL，并使用命名数据卷保存数据。
 
 前端镜像使用 `package-lock.json` 和 `npm ci` 安装依赖，以确保可复现构建。`frontend/.dockerignore` 会排除本地 `node_modules` 与 `dist`，避免将开发产物传入镜像构建上下文。
@@ -100,9 +129,15 @@ Docker Compose 包含三个服务：
 
 1. 复制 `.env.example` 为 `.env`，按需填入模型配置。
 2. 执行 `docker compose up -d --build`。
-3. 访问 `http://localhost:5173`；API 健康检查地址为 `http://localhost:8000/health`。
+3. 访问 `http://localhost:5173`；API 健康检查地址为 `http://localhost:8000/health`；数据库管理界面为 `http://localhost:8081`。
+
+Adminer 登录时选择 PostgreSQL，服务器填写 `db`，用户名和数据库名均为 `shop_agent`，密码使用 `.env` 中的 `POSTGRES_PASSWORD`。默认数据库端口不暴露到宿主机，Adminer 通过 Docker 内部网络连接数据库。
 
 API 容器启动时会先执行数据库迁移，再运行 `python -m app.seed`。初始化脚本仅在缺少模拟指标时插入数据，因此重启容器不会重复写入。内置数据包含 3 个商品、2 个渠道以及最近 14 天的访客、支付订单、GMV 和退款订单；可通过 `GET /api/metrics/overview` 查看两周环比汇总。
+
+本地语义向量模型不随镜像或 Git 仓库提交。首次使用依次执行 `docker compose build api model-download`、`docker compose run --rm model-download`、`docker compose up -d api` 和 `docker compose exec api python -m app.reindex_embeddings`。模型会下载到宿主机的 `models/bge-small-zh-v1.5` 并以只读卷挂载到 API 容器；下载完成后重建指标向量。API 运行期间不会下载模型或调用外部嵌入 API。
+
+镜像为 CPU 推理预装 PyTorch CPU 轮子，不会安装 CUDA 运行库；如后续需要 GPU 推理，应单独提供 GPU 镜像与 `LOCAL_EMBEDDING_DEVICE` 配置，而不是在默认镜像中混入 CUDA 依赖。
 
 停止服务使用 `docker compose down`。不要加 `-v`，否则会删除本地数据库卷。数据库备份、HTTPS 和生产域名在正式部署前再按目标环境补充。
 

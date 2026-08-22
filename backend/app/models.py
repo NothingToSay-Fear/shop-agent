@@ -2,7 +2,7 @@ import uuid
 from datetime import date, datetime
 from decimal import Decimal
 
-from sqlalchemy import Date, DateTime, ForeignKey, Integer, Numeric, String, Text, func
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, JSON, Numeric, String, Text, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -59,6 +59,24 @@ class DailyMetric(Base):
     source: Mapped[str] = mapped_column(String(30), nullable=False, default="demo")
 
 
+class MetricDefinition(Base, TimestampMixin):
+    """可检索的指标知识：业务口径、依赖关系和受控查询模板均由此表管理。"""
+
+    __tablename__ = "metric_definitions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    metric_code: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    aliases: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    dependency_codes: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    query_template: Mapped[str | None] = mapped_column(Text, nullable=True)
+    calculation_formula: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    embedding: Mapped[list[float] | None] = mapped_column(JSON, nullable=True)
+    embedding_model: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+
 class Message(Base):
     """会话中的一条用户或 Agent 消息。"""
     __tablename__ = "messages"
@@ -86,19 +104,6 @@ class Task(Base, TimestampMixin):
     priority: Mapped[str] = mapped_column(String(20), nullable=False, default="medium")
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="todo")
     acceptance_metric: Mapped[str | None] = mapped_column(String(500), nullable=True)
-
-
-class Feedback(Base):
-    """针对 Agent 回答的有帮助/无帮助轻量反馈。"""
-    __tablename__ = "feedback"
-
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    message_id: Mapped[str] = mapped_column(ForeignKey("messages.id"), index=True)
-    feedback_type: Mapped[str] = mapped_column(String(20), nullable=False)
-    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
-    )
 
 
 class ToolCall(Base):

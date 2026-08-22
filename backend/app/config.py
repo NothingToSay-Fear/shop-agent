@@ -11,6 +11,9 @@ class Settings(BaseSettings):
     llm_api_key: str | None = None
     llm_model: str | None = None
     llm_base_url: str | None = None
+    local_embedding_model_path: str | None = None
+    local_embedding_model_id: str = "BAAI/bge-small-zh-v1.5"
+    local_embedding_device: str = "cpu"
     cors_origins: str = "http://localhost:5173"
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
@@ -24,6 +27,11 @@ class Settings(BaseSettings):
     def llm_enabled(self) -> bool:
         # 仅有模型名称不足以调用服务；缺少密钥时避免意外的外部请求。
         return bool(self.llm_api_key and self.llm_model)
+
+    @property
+    def local_embedding_enabled(self) -> bool:
+        """仅在配置本地模型目录后启用本地语义向量化。"""
+        return bool(self.local_embedding_model_path)
 
 
 @lru_cache

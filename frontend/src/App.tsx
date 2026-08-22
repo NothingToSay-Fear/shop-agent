@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from "react";
 import {
   CheckCircleOutlined,
   FileTextOutlined,
-  LikeOutlined,
   MessageOutlined,
   PlusOutlined,
   SendOutlined,
@@ -160,15 +159,6 @@ export function App() {
     }
   }
 
-  async function feedback(messageId: string, type: "up" | "down") {
-    try {
-      await api.sendFeedback(messageId, type);
-      message.success("感谢你的反馈。");
-    } catch {
-      message.error("反馈提交失败。");
-    }
-  }
-
   if (loading) {
     return <Spin className="page-spinner" size="large" />;
   }
@@ -232,9 +222,6 @@ export function App() {
                     <Space className="message-actions">
                         <Button type="link" size="small" icon={<ProfileOutlined />} onClick={() => void createTask(item)}>
                         创建任务
-                      </Button>
-                      <Button type="link" size="small" icon={<LikeOutlined />} onClick={() => void feedback(item.id, "up")}>
-                        有帮助
                       </Button>
                     </Space>
                   )}

@@ -7,7 +7,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# 嵌入模型在默认配置下使用 CPU 推理；预装 CPU 轮子以避免 pip 拉取数 GB 的 CUDA 运行库。
+RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu torch==2.7.1+cpu \
+    && pip install --no-cache-dir -r requirements.txt
 
 COPY app ./app
 COPY alembic.ini .

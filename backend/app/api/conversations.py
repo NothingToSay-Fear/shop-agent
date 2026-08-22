@@ -15,7 +15,7 @@ from app.schemas.conversation import (
     MessageCreate,
     MessageRead,
 )
-from app.services.metrics import get_metrics_overview
+from app.services.metric_rag import query_metrics_for_question
 
 router = APIRouter(prefix="/api/conversations", tags=["conversations"])
 
@@ -69,9 +69,9 @@ async def create_message(
     await session.commit()
 
     agent = OperationAgent()
-    # 每次回答读取最新模拟数据；后续接入真实工具时可在这里扩展数据上下文。
-    overview = await get_metrics_overview(session)
-    data_context = overview.to_agent_context() if overview else None
+    # RAG 先从指标知识表中匹配用户问题，再只执行该指标及依赖所需的受控 SQL。
+    metric_context = await query_metrics_for_question(session, payload.content)
+    data_context = metric_context.text if metric_context else None
 
     async def event_stream():
         # 浏览器会立即渲染每个分片，并在收到 `done` 后重新加载持久化消息。
@@ -86,8 +86,8 @@ async def create_message(
                 sender_type="agent",
                 content=full_answer,
                 data_references=(
-                    "内置模拟经营数据：最近两周 GMV、订单、访客、转化率与退款订单"
-                    if data_context
+                    f"内置模拟经营数据：{', '.join(metric_context.metric_codes)}"
+                    if metric_context
                     else "演示模式：尚未接入真实数据源"
                 ),
             )

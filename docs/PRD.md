@@ -158,7 +158,6 @@ Agent 识别意图、时间范围与目标
 | 消息 Message | `id`、会话 ID、发送方类型、内容、数据引用、生成状态、创建时间 |
 | 任务 Task | `id`、来源消息 ID、标题、负责人、截止时间、优先级、状态、验收指标 |
 | 工具调用 ToolCall | `id`、消息 ID、工具名、入参摘要、结果摘要、状态、耗时、错误码 |
-| 反馈 Feedback | `id`、消息 ID、用户 ID、类型、原因、创建时间 |
 
 ### 8.2 数据原则
 
@@ -173,7 +172,7 @@ Agent 识别意图、时间范围与目标
 
 | 服务 | 职责 |
 | --- | --- |
-| Web 前端 | 对话交互、图表/表格渲染、任务操作、反馈和埋点 |
+| Web 前端 | 对话交互、图表/表格渲染、任务操作和埋点 |
 | API 服务（FastAPI） | 会话/任务管理、SSE 流式响应、管理接口 |
 | Agent 服务（DeepAgent） | 意图识别、上下文编排、工具调用、答案生成和安全策略 |
 | 数据连接服务 | 统一查询商品、订单、流量和推广等业务数据 |
@@ -187,7 +186,6 @@ Agent 识别意图、时间范围与目标
 | `GET` | `/api/conversations` | 获取当前用户会话列表 |
 | `GET` | `/api/conversations/{id}/messages` | 获取会话消息和引用摘要 |
 | `POST` | `/api/conversations/{id}/messages` | 发送消息并以 SSE 流式返回回答 |
-| `POST` | `/api/messages/{id}/feedback` | 提交回答反馈 |
 | `POST` | `/api/tasks` | 从建议创建运营任务 |
 | `PATCH` | `/api/tasks/{id}` | 更新任务状态和执行信息 |
 | `GET` | `/api/admin/metrics` | 获取运营与 Agent 使用指标 |
