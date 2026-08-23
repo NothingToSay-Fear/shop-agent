@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import date, timedelta
 from decimal import Decimal
@@ -37,6 +38,12 @@ WHERE source = :source AND metric_date BETWEEN :start_date AND :end_date
 
 CONTROLLED_SQL_TEMPLATES = frozenset(
     {SUM_PAID_GMV_SQL, SUM_PAID_ORDER_SQL, SUM_VISITOR_SQL, SUM_REFUND_ORDER_SQL}
+)
+
+EXPLICIT_DATE_RANGE_PATTERN = re.compile(
+    r"(?P<year>20\d{2})\s*年\s*(?P<month>\d{1,2})\s*月\s*(?P<day>\d{1,2})\s*日?"
+    r"\s*(?:至|到|~|-)\s*(?:(?P<end_year>20\d{2})\s*年\s*)?"
+    r"(?P<end_month>\d{1,2})\s*月\s*(?P<end_day>\d{1,2})\s*日?"
 )
 
 METRIC_DEFINITION_SEEDS = (
@@ -182,7 +189,10 @@ async def seed_metric_definitions(session: AsyncSession) -> None:
 
 
 async def query_metrics_for_question(
-    session: AsyncSession, question: str, settings: Settings | None = None
+    session: AsyncSession,
+    question: str,
+    settings: Settings | None = None,
+    query_embedding: list[float] | None = None,
 ) -> MetricQueryContext | None:
     """检索用户需要的指标，补齐依赖后仅执行对应基础指标的受控 SQL。"""
     definitions = list(
@@ -192,14 +202,14 @@ async def query_metrics_for_question(
         return None
 
     active_settings = settings or get_settings()
-    query_embedding = await _query_embedding(question, active_settings)
-    if query_embedding is None:
+    active_query_embedding = query_embedding or await _query_embedding(question, active_settings)
+    if active_query_embedding is None:
         return None
     embeddings_ready = await _ensure_definition_embeddings(session, definitions, active_settings)
     if not embeddings_ready:
         return None
     documents = [_to_document(definition) for definition in definitions]
-    requested = retrieve_metrics(question, documents, query_embedding)
+    requested = retrieve_metrics(question, documents, active_query_embedding)
     if not requested:
         return None
 
@@ -300,6 +310,9 @@ def _resolve_dependencies(
 
 async def _resolve_period(session: AsyncSession, question: str) -> tuple[date, date] | None:
     """将当前支持的自然语言时间范围映射为受控日期参数。"""
+    explicit_period = _parse_explicit_date_range(question)
+    if explicit_period is not None:
+        return explicit_period
     latest_date = await session.scalar(
         select(func.max(DailyMetric.metric_date)).where(DailyMetric.source == "demo")
     )
@@ -311,6 +324,25 @@ async def _resolve_period(session: AsyncSession, question: str) -> tuple[date, d
     if "上周" in lowered:
         return latest_date - timedelta(days=13), latest_date - timedelta(days=7)
     return latest_date - timedelta(days=6), latest_date
+
+
+def _parse_explicit_date_range(question: str) -> tuple[date, date] | None:
+    """解析完整年份的中文日期区间；解析失败时不将用户文本带入 SQL。"""
+    match = EXPLICIT_DATE_RANGE_PATTERN.search(question)
+    if match is None:
+        return None
+    try:
+        start_date = date(
+            int(match["year"]), int(match["month"]), int(match["day"])
+        )
+        end_date = date(
+            int(match["end_year"] or match["year"]),
+            int(match["end_month"]),
+            int(match["end_day"]),
+        )
+    except ValueError:
+        return None
+    return (start_date, end_date) if start_date <= end_date else None
 
 
 async def _execute_controlled_template(

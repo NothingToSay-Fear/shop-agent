@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import get_settings
+from app.config import Settings, get_settings
 from app.models import KnowledgeChunk, KnowledgeDocument
 from app.services.local_embeddings import embed_texts
 from app.services.metric_rag import cosine_similarity
@@ -20,12 +20,19 @@ class KnowledgeQueryContext:
 
 
 async def query_knowledge_for_question(
-    session: AsyncSession, question: str, group_name: str | None = None
+    session: AsyncSession,
+    question: str,
+    group_name: str | None = None,
+    settings: Settings | None = None,
+    query_embedding: list[float] | None = None,
 ) -> KnowledgeQueryContext | None:
     """仅检索已完成向量化的片段，避免以未处理资料作为问答依据。"""
-    settings = get_settings()
-    embeddings = await embed_texts([question], settings)
-    if not embeddings:
+    active_settings = settings or get_settings()
+    active_query_embedding = query_embedding
+    if active_query_embedding is None:
+        embeddings = await embed_texts([question], active_settings)
+        active_query_embedding = embeddings[0] if embeddings else None
+    if active_query_embedding is None:
         return None
 
     statement = (
@@ -38,9 +45,9 @@ async def query_knowledge_for_question(
     rows = (await session.execute(statement)).all()
     scored = sorted(
         (
-            (cosine_similarity(embeddings[0], chunk.embedding or []), chunk, document)
+            (cosine_similarity(active_query_embedding, chunk.embedding or []), chunk, document)
             for chunk, document in rows
-            if chunk.embedding and len(chunk.embedding) == len(embeddings[0])
+            if chunk.embedding and len(chunk.embedding) == len(active_query_embedding)
         ),
         key=lambda item: item[0],
         reverse=True,

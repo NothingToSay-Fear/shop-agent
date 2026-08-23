@@ -17,6 +17,7 @@ from app.schemas.conversation import (
 )
 from app.services.metric_rag import query_metrics_for_question
 from app.services.knowledge_rag import query_knowledge_for_question
+from app.services.intent_router import route_question
 
 router = APIRouter(prefix="/api/conversations", tags=["conversations"])
 
@@ -70,21 +71,29 @@ async def create_message(
     await session.commit()
 
     agent = OperationAgent()
-    # 综合分析默认同时检索经营指标与资料知识，二者以明确来源标签传给 Agent 归纳。
+    # 综合模式先以本地语义路由选择数据源；低置信度问题才保守地同时检索两类资料。
     metric_context = None
     knowledge_context = None
-    if payload.mode in ("hybrid", "metrics"):
-        metric_context = await query_metrics_for_question(session, payload.content)
-    if payload.mode in ("hybrid", "knowledge"):
+    effective_mode = payload.mode
+    query_embedding = None
+    if payload.mode == "hybrid":
+        route = await route_question(payload.content)
+        effective_mode = route.mode
+        query_embedding = route.query_embedding
+    if effective_mode in ("hybrid", "metrics"):
+        metric_context = await query_metrics_for_question(
+            session, payload.content, query_embedding=query_embedding
+        )
+    if effective_mode in ("hybrid", "knowledge"):
         knowledge_context = await query_knowledge_for_question(
-            session, payload.content, payload.knowledge_group
+            session, payload.content, payload.knowledge_group, query_embedding=query_embedding
         )
     context_parts: list[str] = []
     if metric_context:
         context_parts.append(f"【经营指标】\n{metric_context.text}")
     if knowledge_context:
         context_parts.append(f"【知识库资料】\n{knowledge_context.text}")
-    if payload.mode == "knowledge" and not knowledge_context:
+    if effective_mode == "knowledge" and not knowledge_context:
         context_parts.append("【知识库资料】\n知识库中未检索到足以回答该问题的资料，请明确说明资料不足。")
     data_context = "\n\n".join(context_parts) or None
 
@@ -100,7 +109,7 @@ async def create_message(
                 conversation_id=conversation_id,
                 sender_type="agent",
                 content=full_answer,
-                data_references=_references(metric_context, knowledge_context, payload.mode),
+                data_references=_references(metric_context, knowledge_context, effective_mode),
             )
             session.add(agent_message)
             await session.commit()

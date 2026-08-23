@@ -1,8 +1,10 @@
+from datetime import date
 from types import SimpleNamespace
 
 from app.services.metric_rag import (
     MetricDocument,
     _calculate_metric,
+    _parse_explicit_date_range,
     _resolve_dependencies,
     retrieve_metrics,
 )
@@ -52,3 +54,10 @@ def test_registered_calculation_formula_uses_only_dependencies() -> None:
     )
 
     assert value == 0.04
+
+
+def test_explicit_date_range_uses_controlled_date_values() -> None:
+    """活动日期可解析为受控日期参数，不能把原始问题拼入 SQL。"""
+    period = _parse_explicit_date_range("查询 2026 年 6 月 6 日至 6 月 18 日的 618 GMV")
+
+    assert period == (date(2026, 6, 6), date(2026, 6, 18))
