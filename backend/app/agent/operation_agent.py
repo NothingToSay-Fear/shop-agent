@@ -2,7 +2,14 @@
 
 from collections.abc import AsyncIterator
 
+from app.agent.rag_tools import RagToolTracker, build_rag_tools
+from app.agent.review_agent import (
+    REVIEW_AGENT_NAME,
+    build_general_subagent,
+    build_review_subagent,
+)
 from app.config import Settings, get_settings
+from app.services.intent_router import RetrievalMode, RetrievalRoute, route_question
 
 SYSTEM_PROMPT = """你是 Shop Agent，一名电商运营工作助手。
 你只能依据用户给出的信息和工具结果陈述事实；不确定时明确说明。
@@ -14,25 +21,69 @@ class OperationAgent:
     """通过 DeepAgent 或离线演示兜底返回流式运营回答。"""
     def __init__(self, settings: Settings | None = None) -> None:
         self.settings = settings or get_settings()
+        self.data_references = "演示模式：尚未检索到相关数据或资料"
 
-    async def stream(self, user_input: str, data_context: str | None = None) -> AsyncIterator[str]:
-        # 持久化职责由 API 处理器负责，Agent 仅生成回答内容。
-        answer = await self._answer(user_input, data_context)
+    async def stream(
+        self,
+        user_input: str,
+        data_context: str | None = None,
+        knowledge_group: str | None = None,
+        retrieval_mode: RetrievalMode = "hybrid",
+    ) -> AsyncIterator[str]:
+        """执行一次主 Agent 编排；data_context 仅保留给已有离线测试和兼容调用。"""
+        if data_context is not None:
+            answer = await self._answer_with_context(user_input, data_context)
+        else:
+            answer = await self._answer_with_rag_tools(user_input, knowledge_group, retrieval_mode)
         for fragment in self._fragments(answer):
             yield fragment
 
-    async def _answer(self, user_input: str, data_context: str | None = None) -> str:
+    async def _answer_with_context(self, user_input: str, data_context: str | None) -> str:
+        """兼容已注入上下文的调用；生产请求统一经 RAG 工具编排。"""
         if self.settings.llm_enabled:
             try:
-                return await self._deep_agent_answer(user_input, data_context)
+                return await self._deep_agent_answer(user_input, data_context, [], None)
             except Exception:
                 # 已配置的模型服务暂不可用时，仍保证本地操作可使用。
                 return self._demo_answer(user_input, data_context, model_error=True)
         return self._demo_answer(user_input, data_context)
 
-    async def _deep_agent_answer(self, user_input: str, data_context: str | None) -> str:
+    async def _answer_with_rag_tools(
+        self,
+        user_input: str,
+        knowledge_group: str | None,
+        retrieval_mode: RetrievalMode,
+    ) -> str:
+        """由主 Agent 使用工具和子 Agent；模型不可用时仍以同一工具完成确定性检索。"""
+        tracker = RagToolTracker()
+        tools = build_rag_tools(tracker, self.settings)
+        route = await self._resolve_route(user_input, retrieval_mode)
+        if self.settings.llm_enabled:
+            try:
+                answer = await self._deep_agent_answer(
+                    user_input, self._routing_instruction(route, knowledge_group), tools, knowledge_group
+                )
+                self.data_references = tracker.references
+                return answer
+            except Exception:
+                await self._run_rag_tools_for_route(tools, user_input, knowledge_group, route)
+                self.data_references = tracker.references
+                return self._demo_answer(user_input, tracker.data_context, model_error=True)
+
+        await self._run_rag_tools_for_route(tools, user_input, knowledge_group, route)
+        self.data_references = tracker.references
+        return self._demo_answer(user_input, tracker.data_context)
+
+    async def _deep_agent_answer(
+        self,
+        user_input: str,
+        orchestration_context: str | None,
+        tools,
+        knowledge_group: str | None,
+    ) -> str:
         # ChatOpenAI 可通过 LLM_BASE_URL 对接 OpenAI 兼容协议的服务端点。
         from deepagents import create_deep_agent
+        from deepagents.middleware.filesystem import FilesystemMiddleware
         from langchain_openai import ChatOpenAI
 
         model_options = {
@@ -44,8 +95,15 @@ class OperationAgent:
             # 仅在用户明确配置时传入可选服务端点。
             model_options["base_url"] = self.settings.llm_base_url
         model = ChatOpenAI(**model_options)
-        agent = create_deep_agent(model=model, system_prompt=SYSTEM_PROMPT)
-        context_suffix = f"\n\n可引用的数据上下文：\n{data_context}" if data_context else ""
+        agent = create_deep_agent(
+            model=model,
+            tools=tools,
+            subagents=[build_general_subagent(tools), build_review_subagent(tools)],
+            # 覆盖框架默认文件系统中间件，只保留其要求的只读能力。
+            middleware=[FilesystemMiddleware(tools=["read_file"])],
+            system_prompt=SYSTEM_PROMPT + self._tool_orchestration_prompt(knowledge_group),
+        )
+        context_suffix = f"\n\n系统编排要求：\n{orchestration_context}" if orchestration_context else ""
         result = await agent.ainvoke(
             {"messages": [{"role": "user", "content": f"{user_input}{context_suffix}"}]}
         )
@@ -54,6 +112,57 @@ class OperationAgent:
             raise RuntimeError("Agent did not return a message")
         content = messages[-1].content
         return content if isinstance(content, str) else str(content)
+
+    async def _resolve_route(
+        self, user_input: str, retrieval_mode: RetrievalMode
+    ) -> RetrievalRoute:
+        """显式模式优先；默认模式由本地语义路由选择需要的工具。"""
+        if retrieval_mode != "hybrid":
+            return RetrievalRoute(retrieval_mode, None, 1.0, False)
+        return await route_question(user_input, self.settings)
+
+    @staticmethod
+    async def _run_rag_tools_for_route(
+        tools, user_input: str, knowledge_group: str | None, route: RetrievalRoute
+    ) -> None:
+        """离线兜底严格按路由调用同一批工具，避免 API 层重新编排 RAG。"""
+        tool_by_name = {item.name: item for item in tools}
+        if route.mode in ("metrics", "hybrid"):
+            await tool_by_name["query_metric_rag"].ainvoke({"question": user_input})
+        if route.mode in ("knowledge", "hybrid"):
+            await tool_by_name["query_knowledge_rag"].ainvoke(
+                {"question": user_input, "group_name": knowledge_group}
+            )
+
+    @staticmethod
+    def _routing_instruction(route: RetrievalRoute, knowledge_group: str | None) -> str:
+        """把本地路由结论转成主 Agent 必须遵守的工具调用约束。"""
+        group_hint = f"知识库分组限定为“{knowledge_group}”。" if knowledge_group else "未限定知识库分组。"
+        if route.mode == "metrics":
+            return f"{group_hint} 该问题被判定为指标查询，必须调用 query_metric_rag。"
+        if route.mode == "knowledge":
+            return f"{group_hint} 该问题被判定为知识库问答，必须调用 query_knowledge_rag。"
+        return (
+            f"{group_hint} 该问题需要综合分析或路由置信度不足，必须调用 query_metric_rag 和 "
+            f"query_knowledge_rag；如涉及复盘、归因、效果评估或优化建议，必须通过 task 委派给 "
+            f"{REVIEW_AGENT_NAME}。"
+        )
+
+    @staticmethod
+    def _tool_orchestration_prompt(knowledge_group: str | None) -> str:
+        """明确主 Agent、工具和复盘子 Agent 的职责边界。"""
+        group_hint = (
+            f"用户限定知识库分组为“{knowledge_group}”，调用知识库工具时必须传入该分组。"
+            if knowledge_group
+            else "用户未限定知识库分组，可检索全部已就绪资料。"
+        )
+        return f"""
+
+你可以调用 query_metric_rag 和 query_knowledge_rag 两个受控工具。不得自行编造数据、规则或引用。
+系统会在用户消息末尾提供必须遵守的工具调用要求；工具结果是唯一可用于数据事实和资料事实的依据。
+当要求中指定复盘子 Agent 时，必须使用 task 委派给 {REVIEW_AGENT_NAME}，再整合其结论。
+{group_hint}
+"""
 
     @staticmethod
     def _demo_answer(

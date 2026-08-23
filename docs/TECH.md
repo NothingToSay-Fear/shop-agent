@@ -11,7 +11,9 @@
 FastAPI API 服务
  ├── 会话、知识库文件、审计接口
  ├── SQLAlchemy 异步数据访问
- └── OperationAgent
+ └── OperationAgent（主 Agent）
+       ├── 指标 RAG 工具 / 知识库 RAG 工具
+       ├── 运营复盘子 Agent（复杂复盘与归因）
        ├── DeepAgent + LangChain + LangGraph（配置模型后）
        └── 演示模式（未配置模型时）
         │
@@ -105,8 +107,10 @@ SQL 模板存储在表中以便维护指标口径，但执行前必须与后端�
 
 ### Agent 服务
 
-- 识别数据问询、经营诊断、内容生成、活动策划与任务复盘等意图。
-- 配置 `LLM_API_KEY` 和 `LLM_MODEL` 后使用 DeepAgent 执行 LangChain/LangGraph Agent 流程。
+- 主 Agent 根据本地语义路由调用 `query_metric_rag`、`query_knowledge_rag` 两个受控工具；工具自行创建短生命周期数据库会话，不向模型暴露连接或任意 SQL。
+- 涉及活动复盘、经营归因、效果评估和优化建议时，主 Agent 通过 DeepAgent `task` 委派给 `operation_review_agent`；子 Agent 只拥有同一批 RAG 工具。项目同时显式覆盖 DeepAgent 默认的 `general-purpose` 子 Agent，防止框架自动附加更宽的能力。
+- 主 Agent 和两个子 Agent 均把框架文件系统能力限制为只读 `read_file`；不提供文件写入、删除或命令执行工具。
+- 配置 `LLM_API_KEY` 和 `LLM_MODEL` 后使用 DeepAgent 执行 LangChain/LangGraph Agent 流程；模型不可用时，主 Agent 仍按路由调用同一批工具后进入演示回答。
 - 未配置模型时使用演示模式，保证本地开发和 Docker 验收不依赖密钥。
 - 后续通过工具适配器接入商品、订单、流量及推广数据源；数据结论必须带数据范围与查询时间。
 

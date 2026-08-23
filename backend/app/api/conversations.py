@@ -15,9 +15,6 @@ from app.schemas.conversation import (
     MessageCreate,
     MessageRead,
 )
-from app.services.metric_rag import query_metrics_for_question
-from app.services.knowledge_rag import query_knowledge_for_question
-from app.services.intent_router import route_question
 
 router = APIRouter(prefix="/api/conversations", tags=["conversations"])
 
@@ -71,37 +68,15 @@ async def create_message(
     await session.commit()
 
     agent = OperationAgent()
-    # 综合模式先以本地语义路由选择数据源；低置信度问题才保守地同时检索两类资料。
-    metric_context = None
-    knowledge_context = None
-    effective_mode = payload.mode
-    query_embedding = None
-    if payload.mode == "hybrid":
-        route = await route_question(payload.content)
-        effective_mode = route.mode
-        query_embedding = route.query_embedding
-    if effective_mode in ("hybrid", "metrics"):
-        metric_context = await query_metrics_for_question(
-            session, payload.content, query_embedding=query_embedding
-        )
-    if effective_mode in ("hybrid", "knowledge"):
-        knowledge_context = await query_knowledge_for_question(
-            session, payload.content, payload.knowledge_group, query_embedding=query_embedding
-        )
-    context_parts: list[str] = []
-    if metric_context:
-        context_parts.append(f"【经营指标】\n{metric_context.text}")
-    if knowledge_context:
-        context_parts.append(f"【知识库资料】\n{knowledge_context.text}")
-    if effective_mode == "knowledge" and not knowledge_context:
-        context_parts.append("【知识库资料】\n知识库中未检索到足以回答该问题的资料，请明确说明资料不足。")
-    data_context = "\n\n".join(context_parts) or None
-
     async def event_stream():
         # 浏览器会立即渲染每个分片，并在收到 `done` 后重新加载持久化消息。
         full_answer = ""
         try:
-            async for fragment in agent.stream(payload.content, data_context):
+            async for fragment in agent.stream(
+                payload.content,
+                knowledge_group=payload.knowledge_group,
+                retrieval_mode=payload.mode,
+            ):
                 full_answer += fragment
                 yield _event("chunk", {"content": fragment})
                 await asyncio.sleep(0)
@@ -109,7 +84,7 @@ async def create_message(
                 conversation_id=conversation_id,
                 sender_type="agent",
                 content=full_answer,
-                data_references=_references(metric_context, knowledge_context, effective_mode),
+                data_references=agent.data_references,
             )
             session.add(agent_message)
             await session.commit()
@@ -134,17 +109,3 @@ async def _get_conversation(conversation_id: str, session: AsyncSession) -> Conv
 def _event(event: str, payload: dict[str, str]) -> str:
     """编码单条服务端推送事件，避免 Agent 层感知传输协议细节。"""
     return f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
-
-
-def _references(metric_context, knowledge_context, mode: str) -> str:
-    """将指标与资料来源并列保存，供历史会话复核。"""
-    references: list[str] = []
-    if metric_context:
-        references.append(f"内置模拟经营数据：{', '.join(metric_context.metric_codes)}")
-    if knowledge_context:
-        references.append(knowledge_context.references)
-    if references:
-        return "；".join(references)
-    if mode == "knowledge":
-        return "知识库未检索到相关资料"
-    return "演示模式：尚未接入真实数据源或相关资料"
