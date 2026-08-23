@@ -1,4 +1,4 @@
-import type { Conversation, Message, Task } from "../types";
+import type { Conversation, Message } from "../types";
 
 // Docker 会在构建期注入该地址；本地开发时回退到默认 API 端口。
 const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:8000";
@@ -24,17 +24,6 @@ export const api = {
     }),
   listMessages: (conversationId: string) =>
     request<Message[]>(`/api/conversations/${conversationId}/messages`),
-  listTasks: () => request<Task[]>("/api/tasks"),
-  createTask: (title: string, sourceMessageId?: string) =>
-    request<Task>("/api/tasks", {
-      method: "POST",
-      body: JSON.stringify({ title, source_message_id: sourceMessageId }),
-    }),
-  updateTask: (id: string, status: Task["status"]) =>
-    request<Task>(`/api/tasks/${id}`, {
-      method: "PATCH",
-      body: JSON.stringify({ status }),
-    }),
   async streamMessage(
     conversationId: string,
     content: string,

@@ -8,9 +8,8 @@
 * { box-sizing: border-box; }
 body { margin: 0; min-width: 1080px; }
 .app-shell { min-height: 100vh; background: #f6f8fb; }
-/* 左侧为会话栏，右侧为执行任务栏。 */
-.conversation-sider, .task-sider { padding: 20px; border-right: 1px solid #edf0f5; }
-.task-sider { border-left: 1px solid #edf0f5; border-right: 0; }
+/* 左侧为会话栏。 */
+.conversation-sider { padding: 20px; border-right: 1px solid #edf0f5; }
 .brand { font-size: 21px; font-weight: 700; margin: 0 0 24px; color: #172554; }
 .brand span { color: #2563eb; }
 .sider-label { display: block; margin: 28px 0 8px; font-size: 12px; }
@@ -28,10 +27,6 @@ body { margin: 0; min-width: 1080px; }
 .message-card.agent { margin-right: 40px; }
 .message-title { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
 .message-body { white-space: pre-wrap; line-height: 1.75; }
-.message-actions { margin-top: 8px; }
 .composer { display: flex; gap: 12px; align-items: end; padding: 16px 32px 24px; background: #fff; border-top: 1px solid #edf0f5; }
 .composer textarea { resize: none; }
-.task-heading { font-weight: 700; margin-bottom: 16px; }
-.task-item { display: grid; gap: 10px; align-items: start; border: 1px solid #edf0f5; border-radius: 8px; padding: 12px !important; margin-bottom: 10px; }
-.task-item .ant-select { width: 100px; }
 .page-spinner { display: grid; place-items: center; min-height: 100vh; }

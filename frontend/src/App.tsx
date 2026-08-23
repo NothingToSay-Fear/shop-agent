@@ -5,13 +5,12 @@ import {
   MessageOutlined,
   PlusOutlined,
   SendOutlined,
-  ProfileOutlined,
   UserOutlined,
 } from "@ant-design/icons";
-import { Button, Card, Input, Layout, List, Select, Space, Spin, Tag, Typography, message } from "antd";
+import { Button, Card, Input, Layout, List, Space, Spin, Tag, Typography, message } from "antd";
 
 import { api } from "./lib/api";
-import type { Conversation, Message, Task } from "./types";
+import type { Conversation, Message } from "./types";
 
 const { Sider, Content } = Layout;
 
@@ -26,7 +25,6 @@ export function App() {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeConversationId, setActiveConversationId] = useState<string>();
   const [messages, setMessages] = useState<Message[]>([]);
-  const [tasks, setTasks] = useState<Task[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(true);
   const [streaming, setStreaming] = useState(false);
@@ -48,10 +46,7 @@ export function App() {
 
   async function bootstrap() {
     try {
-      const [existingConversations, existingTasks] = await Promise.all([
-        api.listConversations(),
-        api.listTasks(),
-      ]);
+      const existingConversations = await api.listConversations();
       if (existingConversations.length === 0) {
         // 首次访问时创建空会话，保证用户可以立即发送消息。
         const firstConversation = await api.createConversation();
@@ -61,7 +56,6 @@ export function App() {
         setConversations(existingConversations);
         setActiveConversationId(existingConversations[0].id);
       }
-      setTasks(existingTasks);
     } catch {
       message.error("无法连接后端，请确认 API 服务已启动。");
     } finally {
@@ -140,25 +134,6 @@ export function App() {
     setConversations(await api.listConversations());
   }
 
-  async function createTask(source: Message) {
-    try {
-      const task = await api.createTask(`跟进：${source.content.slice(0, 36)}`, source.id);
-      setTasks((items) => [task, ...items]);
-      message.success("已创建运营任务。");
-    } catch {
-      message.error("创建任务失败。");
-    }
-  }
-
-  async function updateTaskStatus(task: Task, status: Task["status"]) {
-    try {
-      const updatedTask = await api.updateTask(task.id, status);
-      setTasks((items) => items.map((item) => (item.id === task.id ? updatedTask : item)));
-    } catch {
-      message.error("更新任务失败。");
-    }
-  }
-
   if (loading) {
     return <Spin className="page-spinner" size="large" />;
   }
@@ -199,7 +174,7 @@ export function App() {
             <section className="welcome">
               <Typography.Title level={2}>今天想推进哪项运营工作？</Typography.Title>
               <Typography.Paragraph type="secondary">
-                我可以帮助你分析经营数据、生成商品内容、规划活动并创建任务。
+                我可以帮助你分析经营数据、生成商品内容并规划活动。
               </Typography.Paragraph>
               <Space wrap>
                 {examples.map((example) => (
@@ -218,13 +193,6 @@ export function App() {
                     <Typography.Text strong>{item.sender_type === "user" ? "运营人员" : "Shop Agent"}</Typography.Text>
                   </div>
                   <div className="message-body">{item.content || "正在思考…"}</div>
-                  {item.sender_type === "agent" && item.id !== "streaming" && (
-                    <Space className="message-actions">
-                        <Button type="link" size="small" icon={<ProfileOutlined />} onClick={() => void createTask(item)}>
-                        创建任务
-                      </Button>
-                    </Space>
-                  )}
                 </Card>
               ))}
             </section>
@@ -250,28 +218,6 @@ export function App() {
         </footer>
       </Content>
 
-      <Sider width={300} theme="light" className="task-sider">
-        <div className="task-heading"><ProfileOutlined /> 运营任务</div>
-        <List
-          dataSource={tasks}
-          locale={{ emptyText: "从 Agent 建议创建任务" }}
-          renderItem={(task) => (
-            <List.Item className="task-item">
-              <Typography.Text>{task.title}</Typography.Text>
-              <Select
-                size="small"
-                value={task.status}
-                onChange={(status: Task["status"]) => void updateTaskStatus(task, status)}
-                options={[
-                  { value: "todo", label: "待处理" },
-                  { value: "in_progress", label: "进行中" },
-                  { value: "completed", label: "已完成" },
-                ]}
-              />
-            </List.Item>
-          )}
-        />
-      </Sider>
     </Layout>
   );
 }

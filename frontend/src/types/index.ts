@@ -15,16 +15,3 @@ export interface Message {
   status: string;
   created_at: string;
 }
-
-export interface Task {
-  id: string;
-  source_message_id: string | null;
-  title: string;
-  assignee: string | null;
-  due_date: string | null;
-  priority: "low" | "medium" | "high";
-  status: "todo" | "in_progress" | "completed";
-  acceptance_metric: string | null;
-  created_at: string;
-  updated_at: string;
-}
