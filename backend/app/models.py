@@ -77,6 +77,40 @@ class MetricDefinition(Base, TimestampMixin):
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
 
+class KnowledgeDocument(Base, TimestampMixin):
+    """运营资料的原始文件、分组和解析后全文。"""
+
+    __tablename__ = "knowledge_documents"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    original_filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    file_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    file_path: Mapped[str] = mapped_column(String(500), nullable=False)
+    group_name: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(30), nullable=False, default="processing")
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    chunk_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
+class KnowledgeChunk(Base):
+    """供语义检索的知识库文本片段及其来源定位信息。"""
+
+    __tablename__ = "knowledge_chunks"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    document_id: Mapped[str] = mapped_column(
+        ForeignKey("knowledge_documents.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    page_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    heading: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    embedding: Mapped[list[float] | None] = mapped_column(JSON, nullable=True)
+    embedding_model: Mapped[str | None] = mapped_column(String(100), nullable=True)
+
+
 class Message(Base):
     """会话中的一条用户或 Agent 消息。"""
     __tablename__ = "messages"

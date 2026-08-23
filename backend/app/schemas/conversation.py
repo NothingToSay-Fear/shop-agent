@@ -1,5 +1,7 @@
 from datetime import datetime
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 
@@ -21,6 +23,8 @@ class ConversationRead(BaseModel):
 class MessageCreate(BaseModel):
     """发送给 Agent 的已校验用户输入。"""
     content: str = Field(min_length=1, max_length=4000)
+    mode: Literal["hybrid", "metrics", "knowledge"] = "hybrid"
+    knowledge_group: str | None = Field(default=None, max_length=100)
 
 
 class MessageRead(BaseModel):

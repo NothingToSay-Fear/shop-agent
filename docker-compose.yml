@@ -25,6 +25,8 @@ services:
       LOCAL_EMBEDDING_MODEL_PATH: ${LOCAL_EMBEDDING_MODEL_PATH:-/models/bge-small-zh-v1.5}
       LOCAL_EMBEDDING_MODEL_ID: ${LOCAL_EMBEDDING_MODEL_ID:-BAAI/bge-small-zh-v1.5}
       LOCAL_EMBEDDING_DEVICE: ${LOCAL_EMBEDDING_DEVICE:-cpu}
+      KNOWLEDGE_UPLOAD_DIR: ${KNOWLEDGE_UPLOAD_DIR:-/uploads}
+      KNOWLEDGE_MAX_UPLOAD_SIZE_MB: ${KNOWLEDGE_MAX_UPLOAD_SIZE_MB:-20}
       CORS_ORIGINS: http://localhost:${FRONTEND_PORT:-5173}
     ports:
       - "${API_PORT:-8000}:8000"
@@ -35,6 +37,8 @@ services:
     volumes:
       # 模型文件由宿主机手动下载并挂载，容器运行时不请求外部嵌入服务。
       - ./models:/models:ro
+      # 原始知识库文件必须持久化，容器重建后才能继续预览和下载。
+      - ./uploads:/uploads
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 10s

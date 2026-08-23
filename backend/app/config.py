@@ -14,6 +14,8 @@ class Settings(BaseSettings):
     local_embedding_model_path: str | None = None
     local_embedding_model_id: str = "BAAI/bge-small-zh-v1.5"
     local_embedding_device: str = "cpu"
+    knowledge_upload_dir: str = "/uploads"
+    knowledge_max_upload_size_mb: int = 20
     cors_origins: str = "http://localhost:5173"
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")

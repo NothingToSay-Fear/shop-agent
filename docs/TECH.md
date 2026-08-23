@@ -9,13 +9,15 @@
         │ HTTP / SSE
         ▼
 FastAPI API 服务
- ├── 会话、任务、反馈、审计接口
+ ├── 会话、知识库文件、审计接口
  ├── SQLAlchemy 异步数据访问
  └── OperationAgent
        ├── DeepAgent + LangChain + LangGraph（配置模型后）
        └── 演示模式（未配置模型时）
         │
         ├── PostgreSQL
+        ├── PostgreSQL：会话、业务数据、指标与知识库向量
+        ├── 宿主机 uploads 卷：知识库原始文件
         ├── 电商业务数据源（后续接入）
         └── 大模型服务（后续按环境配置）
 ```
@@ -40,6 +42,28 @@ SQL 模板存储在表中以便维护指标口径，但执行前必须与后端�
 
 嵌入配置采用手动引入的本地模型。模型文件由宿主机下载并挂载到 API 容器，运行时通过 Sentence Transformers 直接加载，不调用外部 Embeddings API。模型未加载或指标向量未重建时，指标 RAG 不查询数据，并记录明确日志。
 
+## 1.2 知识库 RAG 查询流程
+
+上传的 PDF、DOCX、Markdown、TXT 文件按用户填写的 `group_name` 分组，解析成纯文本后按约 800 字符切块（保留 120 字符重叠）；PDF 片段同时记录页码。上传请求在向量化完成前保持 loading 状态，完成后文档为 `ready` 并显示“索引已完成，可检索”；模型不可用时保留为 `pending_embedding`。原始文件持久化在宿主机 `uploads/`，解析正文和片段向量存入 PostgreSQL。
+
+```text
+上传文件 + 分组
+  -> 校验格式与大小
+  -> 提取文本并保存原件
+  -> 切分 knowledge_chunks
+  -> 本地模型向量化
+  -> ready / pending_embedding
+
+综合分析 + 可选知识库分组
+  -> 问题向量化
+  -> 指标 RAG 按需执行受控 SQL
+  -> 知识库余弦相似度 Top-4 检索
+  -> 数据结果 + 文档标题/页码作为并列依据
+  -> LLM 归纳结论、建议与验证动作
+```
+
+本地模型未就绪时，文件仍会保存为 `pending_embedding`，不会参与知识库检索。模型下载完成后执行 `python -m app.reindex_embeddings`，可同时重建指标定义和知识库片段向量。删除资料时，数据库以外键级联删除 `knowledge_chunks`（含向量），随后删除 `uploads/` 中的原文件。
+
 | 环境变量 | 是否必填 | 说明 |
 | --- | --- | --- |
 | `LOCAL_EMBEDDING_MODEL_PATH` | 使用本地语义检索时必填 | 容器中的模型目录，默认 `/models/bge-small-zh-v1.5` |
@@ -53,10 +77,10 @@ SQL 模板存储在表中以便维护指标口径，但执行前必须与后端�
 | 层级 | 技术 | 作用 |
 | --- | --- | --- |
 | 前端 | React、TypeScript、Vite | 构建运营工作台与类型安全的前端代码 |
-| 前端 UI | Ant Design | 表单、任务列表、会话界面与基础数据展示 |
+| 前端 UI | Ant Design | 表单、知识库管理、会话界面与基础数据展示 |
 | 后端 | Python 3.12、FastAPI、Uvicorn | REST API、SSE 流式回答与健康检查 |
 | Agent | DeepAgent、LangChain、LangGraph | Agent 执行、多步骤编排、模型与工具抽象 |
-| 数据库 | PostgreSQL | 保存会话、消息、任务、反馈与工具调用记录 |
+| 数据库 | PostgreSQL | 保存会话、消息、业务数据、指标定义与知识库片段 |
 | ORM | SQLAlchemy、asyncpg、Alembic | 异步访问 PostgreSQL 与管理表结构迁移 |
 | 部署 | Docker、Docker Compose | 单机容器化交付与本地一致运行环境 |
 | 测试 | Pytest、HTTPX | API 与业务逻辑测试 |
@@ -66,12 +90,12 @@ SQL 模板存储在表中以便维护指标口径，但执行前必须与后端�
 ### 前端
 
 - 管理会话、发送运营问题并流式展示回答。
-- 展示回答中的数据依据、建议、任务和反馈操作。
-- 通过 REST API 获取历史会话与任务，通过 SSE 获取实时回答。
+- 展示回答中的数据依据、资料引用与建议。
+- 通过 REST API 获取历史会话和知识库文件，通过 SSE 获取实时回答。
 
 ### API 服务
 
-- 保存会话、消息、任务、反馈与审计信息。
+- 保存会话、消息、指标定义、知识库文件和检索片段。
 - 将用户输入交给 `OperationAgent`，再以 SSE 转发回答片段。
 - 暴露 `/health` 用于 Docker 健康检查。
 
@@ -104,6 +128,8 @@ SQL 模板存储在表中以便维护指标口径，但执行前必须与后端�
 | `products` | 内置模拟商品资料，后续可替换为真实商品数据源 |
 | `daily_metrics` | 近 14 天按商品和渠道汇总的模拟经营指标 |
 | `metric_definitions` | 指标名称、描述、别名、依赖、受控模板、公式和 RAG 向量缓存 |
+| `knowledge_documents` | 原始文件元信息、分组、解析正文、处理状态和片段数 |
+| `knowledge_chunks` | 文件片段、PDF 页码、向量与所用模型标识 |
 
 ## 5. 配置原则
 
@@ -111,11 +137,12 @@ SQL 模板存储在表中以便维护指标口径，但执行前必须与后端�
 - 不将模型密钥、数据库密码或外部数据源凭据提交到仓库。
 - `DATABASE_URL` 默认指向 Docker Compose 中的 PostgreSQL 服务。
 - `LLM_API_KEY`、`LLM_MODEL` 和可选的 `LLM_BASE_URL` 均通过环境变量配置；不预设任何模型。
+- `KNOWLEDGE_UPLOAD_DIR` 默认 `/uploads`，由 Docker 映射为宿主机 `uploads/`；上传原件不写入镜像或数据库临时目录。
 - 当前模型适配器采用 OpenAI 兼容协议，因此可配置支持该协议的模型服务地址和模型名称，而不绑定特定厂商；未配置密钥和模型时启用演示模式。
 
 ## 6. Docker 部署
 
-Docker Compose 包含四个服务：
+Docker Compose 包含四个常驻服务和一个按需工具服务：
 
 - `frontend`：构建并提供 React 静态页面。
 - `api`：运行 FastAPI 与 Agent 服务。
@@ -132,9 +159,9 @@ Docker Compose 包含四个服务：
 
 Adminer 登录时选择 PostgreSQL，服务器填写 `db`，用户名和数据库名均为 `shop_agent`，密码使用 `.env` 中的 `POSTGRES_PASSWORD`。默认数据库端口不暴露到宿主机，Adminer 通过 Docker 内部网络连接数据库。
 
-API 容器启动时会先执行数据库迁移，再运行 `python -m app.seed`。初始化脚本仅在缺少模拟指标时插入数据，因此重启容器不会重复写入。内置数据包含 3 个商品、2 个渠道以及最近 14 天的访客、支付订单、GMV 和退款订单；可通过 `GET /api/metrics/overview` 查看两周环比汇总。
+API 容器启动时会先执行数据库迁移，再运行 `python -m app.seed`。初始化脚本仅在缺少模拟指标时插入数据，因此重启容器不会重复写入。内置数据包含 3 个商品、2 个渠道以及最近 14 天的访客、支付订单、GMV 和退款订单；可通过 `GET /api/metrics/overview` 查看两周环比汇总。知识库原始文件保存在 `uploads/` 挂载目录，重建 API 容器不会丢失；不要随意删除该目录。
 
-本地语义向量模型不随镜像或 Git 仓库提交。首次使用依次执行 `docker compose build api model-download`、`docker compose run --rm model-download`、`docker compose up -d api` 和 `docker compose exec api python -m app.reindex_embeddings`。模型会下载到宿主机的 `models/bge-small-zh-v1.5` 并以只读卷挂载到 API 容器；下载完成后重建指标向量。API 运行期间不会下载模型或调用外部嵌入 API。
+本地语义向量模型不随镜像或 Git 仓库提交。首次使用依次执行 `docker compose build api model-download`、`docker compose run --rm model-download`、`docker compose up -d api` 和 `docker compose exec api python -m app.reindex_embeddings`。模型会下载到宿主机的 `models/bge-small-zh-v1.5` 并以只读卷挂载到 API 容器；下载完成后重建指标定义和知识库片段向量。API 运行期间不会下载模型或调用外部嵌入 API。
 
 镜像为 CPU 推理预装 PyTorch CPU 轮子，不会安装 CUDA 运行库；如后续需要 GPU 推理，应单独提供 GPU 镜像与 `LOCAL_EMBEDDING_DEVICE` 配置，而不是在默认镜像中混入 CUDA 依赖。
 

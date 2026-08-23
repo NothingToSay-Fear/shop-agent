@@ -44,14 +44,14 @@ async def embed_texts(texts: list[str], settings: Settings) -> list[list[float]]
             tuple(texts),
         )
     except Exception as error:
-        logger.warning("本地嵌入模型不可用，无法执行指标语义检索：%s", error)
+        logger.warning("本地嵌入模型不可用，无法执行 RAG 语义检索：%s", error)
         return None
 
 
 async def preload_model(settings: Settings) -> bool:
     """在应用启动期预加载模型，提前暴露路径或依赖问题。"""
     if not settings.local_embedding_enabled:
-        logger.warning("未配置本地嵌入模型目录，指标 RAG 不可用。")
+        logger.warning("未配置本地嵌入模型目录，RAG 语义检索不可用。")
         return False
     vectors = await embed_texts(["本地嵌入模型预热"], settings)
     if vectors is None:

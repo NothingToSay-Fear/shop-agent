@@ -13,3 +13,5 @@ frontend/dist/
 approach/
 models/*
 !models/.gitkeep
+uploads/*
+!uploads/.gitkeep

@@ -67,6 +67,22 @@ class OperationAgent:
         if model_error:
             prefix = "模型服务暂不可用，已切换到演示模式。以下内容未查询真实业务数据。\n\n"
 
+        if data_context and "【知识库资料】" in data_context and "【经营指标】" not in data_context:
+            if "未检索到" in data_context:
+                return "当前知识库中未检索到足以回答该问题的资料，请上传或选择相关的运营活动、玩法规则文件后再试。"
+            return (
+                "当前为演示模式。以下回答仅整理知识库检索到的资料，不补充资料中未出现的事实。\n\n"
+                f"## 检索依据\n{data_context}\n\n"
+                "请配置 LLM 服务后，系统会基于上述依据生成更完整的归纳回答。"
+            )
+
+        if data_context and "【经营指标】" in data_context and "【知识库资料】" in data_context:
+            return (
+                "当前为演示模式。以下内容同时包含经营指标与知识库资料，请将数据事实和历史经验分开理解。\n\n"
+                f"## 综合依据\n{data_context}\n\n"
+                "请配置 LLM 服务后，系统会基于两类依据生成完整的归因、建议与验证动作。"
+            )
+
         if any(keyword in lower_input for keyword in ("gmv", "环比", "同比", "订单", "转化", "客单", "退款", "流量")):
             metric_summary = data_context or "暂无可用经营数据，请先执行模拟数据初始化。"
             return (

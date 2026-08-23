@@ -13,6 +13,7 @@ body { margin: 0; min-width: 1080px; }
 .brand { font-size: 21px; font-weight: 700; margin: 0 0 24px; color: #172554; }
 .brand span { color: #2563eb; }
 .sider-label { display: block; margin: 28px 0 8px; font-size: 12px; }
+.knowledge-button { margin-top: 10px; }
 .conversation-item { gap: 10px; border-radius: 8px; padding: 10px !important; cursor: pointer; border-block-end: 0 !important; }
 .conversation-item.active { background: #eff6ff; color: #1d4ed8; }
 .workspace { display: flex; flex-direction: column; min-width: 0; }
@@ -27,6 +28,12 @@ body { margin: 0; min-width: 1080px; }
 .message-card.agent { margin-right: 40px; }
 .message-title { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
 .message-body { white-space: pre-wrap; line-height: 1.75; }
+.message-reference { display: block; margin-top: 12px; font-size: 12px; }
 .composer { display: flex; gap: 12px; align-items: end; padding: 16px 32px 24px; background: #fff; border-top: 1px solid #edf0f5; }
+.composer-knowledge { display: flex; flex-direction: column; gap: 8px; width: 190px; }
+.composer-knowledge .ant-select { width: 100%; }
 .composer textarea { resize: none; }
 .page-spinner { display: grid; place-items: center; min-height: 100vh; }
+.knowledge-upload { display: grid; gap: 12px; padding: 16px; margin-bottom: 24px; border: 1px solid #e6eaf0; border-radius: 10px; background: #fafcff; }
+.file-input { width: 100%; }
+.knowledge-preview { white-space: pre-wrap; max-height: 60vh; overflow-y: auto; line-height: 1.75; }

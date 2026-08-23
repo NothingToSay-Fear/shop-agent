@@ -1,4 +1,10 @@
-import type { Conversation, Message } from "../types";
+import type {
+  Conversation,
+  KnowledgeDocument,
+  KnowledgeDocumentContent,
+  KnowledgeGroup,
+  Message,
+} from "../types";
 
 // Docker 会在构建期注入该地址；本地开发时回退到默认 API 端口。
 const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:8000";
@@ -24,9 +30,38 @@ export const api = {
     }),
   listMessages: (conversationId: string) =>
     request<Message[]>(`/api/conversations/${conversationId}/messages`),
+  listKnowledgeGroups: () => request<KnowledgeGroup[]>("/api/knowledge/groups"),
+  listKnowledgeDocuments: (groupName?: string) =>
+    request<KnowledgeDocument[]>(
+      `/api/knowledge/documents${groupName ? `?group_name=${encodeURIComponent(groupName)}` : ""}`,
+    ),
+  getKnowledgeDocument: (documentId: string) =>
+    request<KnowledgeDocumentContent>(`/api/knowledge/documents/${documentId}`),
+  async uploadKnowledgeDocument(file: File, groupName: string): Promise<KnowledgeDocument> {
+    // 文件上传不能使用全局 JSON 请求头，否则浏览器无法携带 multipart 边界。
+    const body = new FormData();
+    body.append("file", file);
+    body.append("group_name", groupName);
+    const response = await fetch(`${API_URL}/api/knowledge/documents`, { method: "POST", body });
+    if (!response.ok) {
+      const payload = (await response.json().catch(() => null)) as { detail?: string } | null;
+      throw new Error(payload?.detail ?? `上传失败：${response.status}`);
+    }
+    return response.json() as Promise<KnowledgeDocument>;
+  },
+  async deleteKnowledgeDocument(documentId: string): Promise<void> {
+    const response = await fetch(`${API_URL}/api/knowledge/documents/${documentId}`, { method: "DELETE" });
+    if (!response.ok) {
+      const payload = (await response.json().catch(() => null)) as { detail?: string } | null;
+      throw new Error(payload?.detail ?? `删除失败：${response.status}`);
+    }
+  },
+  getKnowledgeDownloadUrl: (documentId: string) => `${API_URL}/api/knowledge/documents/${documentId}/download`,
   async streamMessage(
     conversationId: string,
     content: string,
+    mode: "hybrid" | "metrics" | "knowledge",
+    knowledgeGroup: string | undefined,
     onChunk: (chunk: string) => void,
     onDone: (messageId: string) => void,
   ): Promise<void> {
@@ -34,7 +69,7 @@ export const api = {
     const response = await fetch(`${API_URL}/api/conversations/${conversationId}/messages`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ content }),
+      body: JSON.stringify({ content, mode, knowledge_group: knowledgeGroup }),
     });
     if (!response.ok || !response.body) throw new Error("无法建立流式连接");
 

@@ -1,4 +1,4 @@
-"""使用当前本地嵌入模型重建指标定义向量。"""
+"""使用当前本地嵌入模型重建指标与知识库向量。"""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ from app.config import get_settings
 from app.database import SessionLocal
 from app.models import MetricDefinition
 from app.services.local_embeddings import embed_texts
+from app.services.knowledge_rag import reindex_knowledge_chunks
 
 
 def _retrieval_text(definition: MetricDefinition) -> str:
@@ -19,8 +20,8 @@ def _retrieval_text(definition: MetricDefinition) -> str:
     )
 
 
-async def reindex_metric_definitions() -> None:
-    """批量覆盖指标定义向量，并记录当前本地模型标识。"""
+async def reindex_embeddings() -> None:
+    """批量覆盖指标定义和知识库片段向量，并记录当前模型标识。"""
     settings = get_settings()
     async with SessionLocal() as session:
         definitions = list(
@@ -33,8 +34,12 @@ async def reindex_metric_definitions() -> None:
             definition.embedding = vector
             definition.embedding_model = settings.local_embedding_model_id
         await session.commit()
-        print(f"已使用 {settings.local_embedding_model_id} 重建 {len(definitions)} 个指标向量。")
+        knowledge_count = await reindex_knowledge_chunks(session)
+        print(
+            f"已使用 {settings.local_embedding_model_id} 重建 {len(definitions)} 个指标向量"
+            f"和 {knowledge_count} 个知识库片段向量。"
+        )
 
 
 if __name__ == "__main__":
-    asyncio.run(reindex_metric_definitions())
+    asyncio.run(reindex_embeddings())
