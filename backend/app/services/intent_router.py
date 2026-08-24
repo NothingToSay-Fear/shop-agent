@@ -10,13 +10,16 @@ from app.config import Settings, get_settings
 from app.services.local_embeddings import embed_texts
 from app.services.metric_rag import cosine_similarity
 
-RetrievalMode = Literal["metrics", "knowledge", "hybrid"]
+RetrievalMode = Literal["metrics", "knowledge", "hybrid", "web"]
+RouteMode = Literal["metrics", "knowledge", "hybrid", "web", "web_hybrid"]
 
 # 原型描述是稳定的产品语义，不是针对某个业务词的硬编码分支。
-INTENT_PROTOTYPES: dict[RetrievalMode, str] = {
+INTENT_PROTOTYPES: dict[RouteMode, str] = {
     "metrics": "查询经营数据、GMV、订单数、访客数、转化率、客单价、退款率、趋势、同比、环比和数值表现。",
     "knowledge": "查询活动规则、玩法说明、运营手册、商品资料、历史方案、活动复盘、流程和已有文档中的事实。",
     "hybrid": "结合经营数据和活动规则或历史资料进行归因、效果分析、优化建议、复盘和下一步运营动作。",
+    "web": "查询最新的公开互联网信息、平台政策、行业动态、竞品新闻、市场趋势、实时资讯和外部资料来源。",
+    "web_hybrid": "结合内部经营数据、活动资料与最新公开平台政策、行业动态或竞品信息，完成综合分析和建议。",
 }
 # 以当前 bge-small-zh-v1.5 的实际中文问题分数校准；仍以分差保护综合问题。
 MINIMUM_CONFIDENCE = 0.45
@@ -27,17 +30,17 @@ MINIMUM_MARGIN = 0.06
 class RetrievalRoute:
     """路由结论与可复用的问题向量。"""
 
-    mode: RetrievalMode
+    mode: RouteMode
     query_embedding: list[float] | None
     confidence: float
     fallback_to_hybrid: bool
 
 
-_prototype_embedding_cache: dict[str, dict[RetrievalMode, list[float]]] = {}
+_prototype_embedding_cache: dict[str, dict[RouteMode, list[float]]] = {}
 _prototype_embedding_lock = asyncio.Lock()
 
 
-def choose_retrieval_route(scores: dict[RetrievalMode, float]) -> tuple[RetrievalMode, float, bool]:
+def choose_retrieval_route(scores: dict[RouteMode, float]) -> tuple[RouteMode, float, bool]:
     """按阈值和第一、二名分差选择路由；不确定时保守地走综合检索。"""
     ranked = sorted(scores.items(), key=lambda item: item[1], reverse=True)
     winner, confidence = ranked[0]
@@ -71,7 +74,7 @@ async def route_question(
 
 async def _get_prototype_embeddings(
     settings: Settings,
-) -> dict[RetrievalMode, list[float]] | None:
+) -> dict[RouteMode, list[float]] | None:
     """按模型版本和设备缓存意图原型向量，避免每个问题重复向量化原型文本。"""
     cache_key = f"{settings.local_embedding_model_id}:{settings.local_embedding_model_path}:{settings.local_embedding_device}"
     cached = _prototype_embedding_cache.get(cache_key)

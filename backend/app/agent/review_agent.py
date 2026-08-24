@@ -11,7 +11,7 @@ REVIEW_AGENT_NAME = "operation_review_agent"
 GENERAL_PURPOSE_AGENT_NAME = "general-purpose"
 
 REVIEW_AGENT_PROMPT = """你是电商运营复盘专家，只处理活动效果、经营归因、复盘与优化建议。
-先调用 query_metric_rag 获取当前或指定周期的数据；问题涉及活动规则、历史方案或复盘资料时，必须再调用 query_knowledge_rag。
+先调用 query_metric_rag 获取当前或指定周期的数据；问题涉及活动规则、历史方案或复盘资料时，必须再调用 query_knowledge_rag；涉及最新平台政策、行业或竞品动态时，调用 search_web。
 只能根据工具返回的数值和资料陈述事实；将“数据事实”“资料依据”“待验证假设”“建议动作”明确区分。
 资料或数据未命中时如实说明，不得自行补全。输出简洁的复盘结论，供主 Agent 直接整合。"""
 
@@ -20,7 +20,7 @@ def build_review_subagent(tools: Sequence[BaseTool]) -> dict[str, object]:
     """构造 DeepAgent 可委派的复盘子 Agent，仅授予受控 RAG 与最小只读文件能力。"""
     return {
         "name": REVIEW_AGENT_NAME,
-        "description": "处理活动复盘、经营归因、效果评估和优化建议；会查询受控指标与知识库依据。",
+        "description": "处理活动复盘、经营归因、效果评估和优化建议；会查询受控指标、知识库和必要的公开网络资料。",
         "system_prompt": REVIEW_AGENT_PROMPT,
         "tools": list(tools),
         # DeepAgent 的文件系统中间件要求至少保留 read_file；不开放写入或命令执行。
@@ -33,7 +33,7 @@ def build_general_subagent(tools: Sequence[BaseTool]) -> dict[str, object]:
     return {
         "name": GENERAL_PURPOSE_AGENT_NAME,
         "description": "处理非复盘类的复杂运营问题；只能使用受控 RAG 工具，不执行文件或外部系统操作。",
-        "system_prompt": """你协助主 Agent 处理复杂运营问题。只能依据 query_metric_rag 和 query_knowledge_rag 的结果回答。
+        "system_prompt": """你协助主 Agent 处理复杂运营问题。只能依据 query_metric_rag、query_knowledge_rag 和 search_web 的结果回答。
 不执行文件写入、命令执行或任何外部操作；资料不足时明确说明。""",
         "tools": list(tools),
         "middleware": [FilesystemMiddleware(tools=["read_file"])],

@@ -16,6 +16,10 @@ class Settings(BaseSettings):
     local_embedding_device: str = "cpu"
     knowledge_upload_dir: str = "/uploads"
     knowledge_max_upload_size_mb: int = 20
+    web_search_provider: str = "tavily"
+    web_search_api_key: str | None = None
+    web_search_max_results: int = 5
+    web_search_timeout_seconds: float = 10.0
     cors_origins: str = "http://localhost:5173"
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
@@ -34,6 +38,11 @@ class Settings(BaseSettings):
     def local_embedding_enabled(self) -> bool:
         """仅在配置本地模型目录后启用本地语义向量化。"""
         return bool(self.local_embedding_model_path)
+
+    @property
+    def web_search_enabled(self) -> bool:
+        """仅在明确选择已支持的提供方并配置密钥后发起外部网络请求。"""
+        return self.web_search_provider.lower() == "tavily" and bool(self.web_search_api_key)
 
 
 @lru_cache

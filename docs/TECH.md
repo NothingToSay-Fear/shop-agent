@@ -12,7 +12,7 @@ FastAPI API 服务
  ├── 会话、知识库文件、审计接口
  ├── SQLAlchemy 异步数据访问
  └── OperationAgent（主 Agent）
-       ├── 指标 RAG 工具 / 知识库 RAG 工具
+       ├── 指标 RAG 工具 / 知识库 RAG 工具 / 联网搜索工具
        ├── 运营复盘子 Agent（复杂复盘与归因）
        ├── DeepAgent + LangChain + LangGraph（配置模型后）
        └── 演示模式（未配置模型时）
@@ -21,7 +21,8 @@ FastAPI API 服务
         ├── PostgreSQL：会话、业务数据、指标与知识库向量
         ├── 宿主机 uploads 卷：知识库原始文件
         ├── 电商业务数据源（后续接入）
-        └── 大模型服务（后续按环境配置）
+        ├── 大模型服务（后续按环境配置）
+        └── Tavily 搜索 API（按环境变量启用）
 ```
 
 ## 1.1 指标 RAG 查询流程
@@ -58,7 +59,7 @@ SQL 模板存储在表中以便维护指标口径，但执行前必须与后端�
 
 综合分析 + 可选知识库分组
   -> 问题向量化（每个问题一次）
-  -> 与缓存的“指标 / 知识库 / 综合”意图原型比较相似度
+  -> 与缓存的“指标 / 知识库 / 综合 / 联网 / 内外部综合”意图原型比较相似度
   -> 高置信度且分差足够：只进入对应 RAG
   -> 低置信度或意图接近：同时进入两类 RAG
   -> 指标 RAG 按需执行受控 SQL / 知识库余弦相似度 Top-4 检索
@@ -66,7 +67,7 @@ SQL 模板存储在表中以便维护指标口径，但执行前必须与后端�
   -> LLM 归纳结论、建议与验证动作
 ```
 
-意图路由复用与后续检索相同的本地问题向量，不额外调用 LLM，也不会引入外部 Embeddings API。“指标查询”“知识库问答”“综合分析”三段稳定的原型描述首次使用时向量化并按模型路径、模型标识和设备缓存在 API 进程内。以当前本地中文模型校准后，最高相似度低于 `0.45`，或第一、第二意图的分差小于 `0.06` 时，系统保守地降级为综合检索；这样能减少明确单一问题的无效检索，同时避免误判导致漏掉资料。用户仍可通过 API 的 `mode=metrics` 或 `mode=knowledge` 显式限定来源，前端默认使用自动路由。
+意图路由复用与后续检索相同的本地问题向量，不额外调用 LLM，也不会引入外部 Embeddings API。“指标查询”“知识库问答”“综合分析”“联网检索”“内外部综合分析”五段稳定的原型描述首次使用时向量化并按模型路径、模型标识和设备缓存在 API 进程内。高置信度的“内外部综合分析”会同时调用三类工具；最高相似度低于 `0.45`，或第一、第二意图的分差小于 `0.06` 时，系统保守地降级为仅检索内部的综合分析，避免不确定问题造成不必要的联网搜索消耗。用户仍可通过 API 的 `mode=metrics`、`mode=knowledge` 或 `mode=web` 显式限定来源，前端默认使用自动路由。
 
 本地模型未就绪时，文件仍会保存为 `pending_embedding`，不会参与知识库检索。模型下载完成后执行 `python -m app.reindex_embeddings`，可同时重建指标定义和知识库片段向量。删除资料时，数据库以外键级联删除 `knowledge_chunks`（含向量），随后删除 `uploads/` 中的原文件。
 
@@ -78,6 +79,29 @@ SQL 模板存储在表中以便维护指标口径，但执行前必须与后端�
 
 当前时间解析支持“最近 7 天”（默认）、“最近 14 天/近 14 天/两周”、“上周”，以及“2026 年 6 月 6 日至 6 月 18 日”这类完整年份的日期区间。新增更多时间范围、渠道或商品维度时，应扩展受控参数解析和模板注册表，不能直接把用户输入拼入 SQL。
 
+## 1.3 联网搜索流程
+
+联网搜索只用于补充具有时效性的公开信息，不替代内部业务数据或用户上传资料。首期通过现有 `httpx` 调用 Tavily 的 `POST /search` 接口，固定使用 `basic` 深度、按配置返回最多 20 条结果且不请求网页原文，避免模型自行选择搜索成本或抓取大量页面内容。Tavily API 采用 Bearer 密钥鉴权并返回按相关性排序的标题、链接和摘要。[官方接口说明](https://tavilyai.mintlify.app/documentation/api-reference/endpoint/search)
+
+```text
+用户问题
+  -> 本地语义路由命中“联网检索”或“内外部综合分析”，或 API 显式指定 mode=web
+  -> 纯外部问题只调用 search_web(question)；内外部综合问题并行调用三类受控工具
+  -> Tavily 基础搜索（超时、数量均由环境变量限制）
+  -> 过滤为 HTTP(S) 标题、链接、限长摘要
+  -> 标记为“不可信网页摘要”后交给 Agent
+  -> Agent 输出结论及可核验链接
+```
+
+网页片段可能包含提示注入、错误信息或过期内容，因此工具不返回网页原文，不执行网页中的指令、链接、下载或写操作；系统提示也要求模型仅把它作为外部参考。搜索结果仅存在于当前回答上下文和消息的来源摘要，不自动向 `knowledge_documents` 或 `knowledge_chunks` 写入内容。未配置密钥、网络超时、HTTP 错误或无结果时，工具返回资料不足，不阻断指标 RAG 或知识库 RAG。
+
+| 环境变量 | 是否必填 | 说明 |
+| --- | --- | --- |
+| `WEB_SEARCH_PROVIDER` | 可选 | 联网搜索提供方；首期仅支持 `tavily`，默认该值 |
+| `WEB_SEARCH_API_KEY` | 启用联网搜索时必填 | Tavily API 密钥；为空时工具禁用且不发起网络请求 |
+| `WEB_SEARCH_MAX_RESULTS` | 可选 | 每次搜索结果数，默认 `5`，运行时限制为 `1` 至 `20` |
+| `WEB_SEARCH_TIMEOUT_SECONDS` | 可选 | 单次搜索超时秒数，默认 `10` |
+
 ## 2. 技术选型
 
 | 层级 | 技术 | 作用 |
@@ -86,6 +110,7 @@ SQL 模板存储在表中以便维护指标口径，但执行前必须与后端�
 | 前端 UI | Ant Design | 表单、知识库管理、会话界面与基础数据展示 |
 | 后端 | Python 3.12、FastAPI、Uvicorn | REST API、SSE 流式回答与健康检查 |
 | Agent | DeepAgent、LangChain、LangGraph | Agent 执行、多步骤编排、模型与工具抽象 |
+| 联网检索 | Tavily Search API、HTTPX | 受控获取公开且有时效性的信息；不引入额外 SDK |
 | 数据库 | PostgreSQL | 保存会话、消息、业务数据、指标定义与知识库片段 |
 | ORM | SQLAlchemy、asyncpg、Alembic | 异步访问 PostgreSQL 与管理表结构迁移 |
 | 部署 | Docker、Docker Compose | 单机容器化交付与本地一致运行环境 |
@@ -107,8 +132,9 @@ SQL 模板存储在表中以便维护指标口径，但执行前必须与后端�
 
 ### Agent 服务
 
-- 主 Agent 根据本地语义路由调用 `query_metric_rag`、`query_knowledge_rag` 两个受控工具；工具自行创建短生命周期数据库会话，不向模型暴露连接或任意 SQL。
-- 涉及活动复盘、经营归因、效果评估和优化建议时，主 Agent 通过 DeepAgent `task` 委派给 `operation_review_agent`；子 Agent 只拥有同一批 RAG 工具。项目同时显式覆盖 DeepAgent 默认的 `general-purpose` 子 Agent，防止框架自动附加更宽的能力。
+- 主 Agent 根据本地语义路由调用 `query_metric_rag`、`query_knowledge_rag`、`search_web` 三个受控工具；前两者自行创建短生命周期数据库会话，不向模型暴露连接或任意 SQL，后者只调用固定的 Tavily 搜索端点。
+- 工具代码按职责位于 `app/agent/tools/`：`metric_rag.py` 负责受控指标查询，`knowledge_rag.py` 负责内部资料检索，`web_search.py` 负责公开网络检索，`tracker.py` 只负责汇总一次调用的依据与来源；`__init__.py` 仅组合工具供 Agent 使用。
+- 涉及活动复盘、经营归因、效果评估和优化建议时，主 Agent 通过 DeepAgent `task` 委派给 `operation_review_agent`；子 Agent 只拥有同一批受控 RAG 与联网搜索工具。项目同时显式覆盖 DeepAgent 默认的 `general-purpose` 子 Agent，防止框架自动附加更宽的能力。
 - 主 Agent 和两个子 Agent 均把框架文件系统能力限制为只读 `read_file`；不提供文件写入、删除或命令执行工具。
 - 配置 `LLM_API_KEY` 和 `LLM_MODEL` 后使用 DeepAgent 执行 LangChain/LangGraph Agent 流程；模型不可用时，主 Agent 仍按路由调用同一批工具后进入演示回答。
 - 未配置模型时使用演示模式，保证本地开发和 Docker 验收不依赖密钥。
@@ -145,6 +171,7 @@ SQL 模板存储在表中以便维护指标口径，但执行前必须与后端�
 - 不将模型密钥、数据库密码或外部数据源凭据提交到仓库。
 - `DATABASE_URL` 默认指向 Docker Compose 中的 PostgreSQL 服务。
 - `LLM_API_KEY`、`LLM_MODEL` 和可选的 `LLM_BASE_URL` 均通过环境变量配置；不预设任何模型。
+- `WEB_SEARCH_API_KEY` 仅用于 Tavily 联网搜索；为空时该工具关闭，不会隐式访问外部网络。公开网页摘要不自动沉淀为知识库。
 - `KNOWLEDGE_UPLOAD_DIR` 默认 `/uploads`，由 Docker 映射为宿主机 `uploads/`；上传原件不写入镜像或数据库临时目录。
 - 当前模型适配器采用 OpenAI 兼容协议，因此可配置支持该协议的模型服务地址和模型名称，而不绑定特定厂商；未配置密钥和模型时启用演示模式。
 
@@ -161,7 +188,7 @@ Docker Compose 包含四个常驻服务和一个按需工具服务：
 
 首次部署步骤：
 
-1. 复制 `.env.example` 为 `.env`，按需填入模型配置。
+1. 复制 `.env.example` 为 `.env`，按需填入模型配置；需要联网搜索时再填写 `WEB_SEARCH_API_KEY`。
 2. 执行 `docker compose up -d --build`。
 3. 访问 `http://localhost:5173`；API 健康检查地址为 `http://localhost:8000/health`；数据库管理界面为 `http://localhost:8081`。
 
