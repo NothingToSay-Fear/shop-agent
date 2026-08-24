@@ -1,4 +1,5 @@
 import type {
+  AgentRunAudit,
   Conversation,
   KnowledgeDocument,
   KnowledgeDocumentContent,
@@ -30,6 +31,8 @@ export const api = {
     }),
   listMessages: (conversationId: string) =>
     request<Message[]>(`/api/conversations/${conversationId}/messages`),
+  getMessageAudit: (conversationId: string, messageId: string) =>
+    request<AgentRunAudit>(`/api/conversations/${conversationId}/messages/${messageId}/audit`),
   listKnowledgeGroups: () => request<KnowledgeGroup[]>("/api/knowledge/groups"),
   listKnowledgeDocuments: (groupName?: string) =>
     request<KnowledgeDocument[]>(
@@ -60,7 +63,7 @@ export const api = {
   async streamMessage(
     conversationId: string,
     content: string,
-    mode: "hybrid" | "metrics" | "knowledge",
+    mode: "hybrid" | "metrics" | "knowledge" | "web",
     knowledgeGroup: string | undefined,
     onChunk: (chunk: string) => void,
     onDone: (messageId: string) => void,

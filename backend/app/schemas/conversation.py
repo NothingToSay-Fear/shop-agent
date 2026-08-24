@@ -38,3 +38,36 @@ class MessageRead(BaseModel):
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class ToolCallAuditRead(BaseModel):
+    """前端可查看的单次工具调用脱敏审计摘要。"""
+
+    tool_name: str
+    input_summary: str | None
+    result_summary: str | None
+    reference_ids: list[str]
+    status: str
+    duration_ms: int | None
+    error_code: str | None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class AgentRunAuditRead(BaseModel):
+    """一条回答对应的最小运行轨迹，不含原始问题和回答正文。"""
+
+    id: str
+    question_summary: str
+    route_mode: str | None
+    route_confidence: float | None
+    route_fallback: bool
+    status: str
+    answer_summary: str | None
+    reference_ids: list[str]
+    total_duration_ms: int | None
+    error_code: str | None
+    created_at: datetime
+    completed_at: datetime | None
+    tool_calls: list[ToolCallAuditRead]

@@ -16,6 +16,33 @@ export interface Message {
   created_at: string;
 }
 
+export interface ToolCallAudit {
+  tool_name: string;
+  input_summary: string | null;
+  result_summary: string | null;
+  reference_ids: string[];
+  status: string;
+  duration_ms: number | null;
+  error_code: string | null;
+  created_at: string;
+}
+
+export interface AgentRunAudit {
+  id: string;
+  question_summary: string;
+  route_mode: string | null;
+  route_confidence: number | null;
+  route_fallback: boolean;
+  status: string;
+  answer_summary: string | null;
+  reference_ids: string[];
+  total_duration_ms: number | null;
+  error_code: string | null;
+  created_at: string;
+  completed_at: string | null;
+  tool_calls: ToolCallAudit[];
+}
+
 export interface KnowledgeDocument {
   id: string;
   title: string;

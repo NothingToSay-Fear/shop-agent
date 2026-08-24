@@ -17,6 +17,7 @@ class KnowledgeQueryContext:
 
     text: str
     references: str
+    reference_ids: tuple[str, ...]
 
 
 async def query_knowledge_for_question(
@@ -58,13 +59,21 @@ async def query_knowledge_for_question(
 
     text_parts = ["以下内容来自知识库。仅可依据这些资料回答；资料未提及的内容请明确说明。"]
     references: list[str] = []
+    reference_ids: list[str] = []
     for _, chunk, document in selected:
         location = f"第 {chunk.page_number} 页" if chunk.page_number else f"片段 {chunk.chunk_index + 1}"
         text_parts.append(f"【{document.title}｜{location}】\n{chunk.content}")
         reference = f"{document.title}（{location}）"
         if reference not in references:
             references.append(reference)
-    return KnowledgeQueryContext(text="\n\n".join(text_parts), references="知识库：" + "、".join(references))
+        reference_id = f"knowledge_chunk:{chunk.id}"
+        if reference_id not in reference_ids:
+            reference_ids.append(reference_id)
+    return KnowledgeQueryContext(
+        text="\n\n".join(text_parts),
+        references="知识库：" + "、".join(references),
+        reference_ids=tuple(reference_ids),
+    )
 
 
 async def reindex_knowledge_chunks(session: AsyncSession) -> int:

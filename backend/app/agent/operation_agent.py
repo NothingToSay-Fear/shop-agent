@@ -3,6 +3,7 @@
 from collections.abc import AsyncIterator
 
 from app.agent.streaming import split_answer_fragments
+from app.agent.tools import AgentToolTracker
 from app.agent.workflow import AgentWorkflow
 from app.config import Settings, get_settings
 from app.services.intent_router import RetrievalMode
@@ -15,6 +16,7 @@ class OperationAgent:
         active_settings = settings or get_settings()
         self.workflow = AgentWorkflow(active_settings)
         self.data_references = "演示模式：尚未检索到相关数据、资料或公开网页来源"
+        self.tool_tracker = AgentToolTracker()
 
     async def stream(
         self,
@@ -29,5 +31,6 @@ class OperationAgent:
         else:
             result = await self.workflow.answer(user_input, knowledge_group, retrieval_mode)
         self.data_references = result.data_references
+        self.tool_tracker = result.tracker
         for fragment in split_answer_fragments(result.answer):
             yield fragment

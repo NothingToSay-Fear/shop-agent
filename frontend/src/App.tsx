@@ -30,7 +30,14 @@ import {
 } from "antd";
 
 import { api } from "./lib/api";
-import type { Conversation, KnowledgeDocument, KnowledgeDocumentContent, KnowledgeGroup, Message } from "./types";
+import type {
+  AgentRunAudit,
+  Conversation,
+  KnowledgeDocument,
+  KnowledgeDocumentContent,
+  KnowledgeGroup,
+  Message,
+} from "./types";
 
 const { Sider, Content } = Layout;
 
@@ -47,7 +54,7 @@ function documentStatusTag(status: string) {
 }
 
 export function App() {
-  // MVP 阶段将会话和任务状态集中在此处；页面增多后再引入全局状态管理。
+  // MVP 阶段将会话和页面状态集中在此处；页面增多后再引入全局状态管理。
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeConversationId, setActiveConversationId] = useState<string>();
   const [messages, setMessages] = useState<Message[]>([]);
@@ -63,6 +70,8 @@ export function App() {
   const [uploading, setUploading] = useState(false);
   const [deletingDocumentId, setDeletingDocumentId] = useState<string>();
   const [previewDocument, setPreviewDocument] = useState<KnowledgeDocumentContent>();
+  const [auditOpen, setAuditOpen] = useState(false);
+  const [auditRecord, setAuditRecord] = useState<AgentRunAudit>();
 
   const activeConversation = useMemo(
     () => conversations.find((item) => item.id === activeConversationId),
@@ -172,6 +181,18 @@ export function App() {
       message.error(error instanceof Error ? error.message : "删除文件失败。");
     } finally {
       setDeletingDocumentId(undefined);
+    }
+  }
+
+  async function openMessageAudit(messageId: string) {
+    if (!activeConversationId) return;
+    setAuditOpen(true);
+    setAuditRecord(undefined);
+    try {
+      setAuditRecord(await api.getMessageAudit(activeConversationId, messageId));
+    } catch {
+      setAuditOpen(false);
+      message.error("未找到该回答的执行审计记录。");
     }
   }
 
@@ -296,6 +317,11 @@ export function App() {
                       依据：{item.data_references}
                     </Typography.Text>
                   )}
+                  {item.sender_type === "agent" && item.status === "completed" && (
+                    <Button type="link" size="small" onClick={() => void openMessageAudit(item.id)}>
+                      查看本次执行依据
+                    </Button>
+                  )}
                 </Card>
               ))}
             </section>
@@ -383,6 +409,54 @@ export function App() {
             </List.Item>
           )}
         />
+      </Drawer>
+      <Drawer
+        title="本次执行依据"
+        width={560}
+        open={auditOpen}
+        onClose={() => setAuditOpen(false)}
+      >
+        {!auditRecord ? (
+          <Spin tip="正在加载执行记录…" />
+        ) : (
+          <Space direction="vertical" size="middle" className="audit-drawer-content">
+            <Typography.Text type="secondary">运行 ID：{auditRecord.id}</Typography.Text>
+            <Typography.Text>问题摘要：{auditRecord.question_summary}</Typography.Text>
+            <Typography.Text>
+              路由：{auditRecord.route_mode ?? "未记录"}
+              {auditRecord.route_confidence !== null && `（置信度 ${auditRecord.route_confidence.toFixed(2)}）`}
+              {auditRecord.route_fallback && "；已采用保守降级"}
+            </Typography.Text>
+            <Typography.Text>
+              状态：{auditRecord.status}；总耗时：{auditRecord.total_duration_ms ?? "-"} ms
+            </Typography.Text>
+            <Typography.Text>回答摘要：{auditRecord.answer_summary ?? "尚未生成"}</Typography.Text>
+            <section>
+              <Typography.Text strong>调用能力</Typography.Text>
+              <List
+                size="small"
+                dataSource={auditRecord.tool_calls}
+                locale={{ emptyText: "本轮未调用受控工具" }}
+                renderItem={(call) => (
+                  <List.Item>
+                    <Space direction="vertical" size={2}>
+                      <Typography.Text strong>{call.tool_name} · {call.status} · {call.duration_ms ?? "-"} ms</Typography.Text>
+                      <Typography.Text type="secondary">{call.input_summary}</Typography.Text>
+                      <Typography.Text>{call.result_summary}</Typography.Text>
+                      {call.reference_ids.length > 0 && (
+                        <Typography.Text type="secondary">引用 ID：{call.reference_ids.join("、")}</Typography.Text>
+                      )}
+                      {call.error_code && <Typography.Text type="warning">原因：{call.error_code}</Typography.Text>}
+                    </Space>
+                  </List.Item>
+                )}
+              />
+            </section>
+            {auditRecord.reference_ids.length > 0 && (
+              <Typography.Text type="secondary">本轮全部引用 ID：{auditRecord.reference_ids.join("、")}</Typography.Text>
+            )}
+          </Space>
+        )}
       </Drawer>
       <Modal
         title={previewDocument?.title}

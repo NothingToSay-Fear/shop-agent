@@ -19,6 +19,7 @@ class WorkflowResult:
 
     answer: str
     data_references: str
+    tracker: AgentToolTracker
 
 
 class AgentWorkflow:
@@ -38,6 +39,7 @@ class AgentWorkflow:
         tracker = AgentToolTracker()
         tools = build_agent_tools(tracker, self.settings)
         route = await self._resolve_route(user_input, retrieval_mode)
+        tracker.set_route(route)
         if self.settings.llm_enabled:
             answer = await self.answer_generator.generate_with_llm(
                 user_input,
@@ -46,17 +48,16 @@ class AgentWorkflow:
                 knowledge_group,
             )
             if answer is not None:
-                return WorkflowResult(answer, tracker.references)
+                return WorkflowResult(answer, tracker.references, tracker)
 
             await self._run_tools_for_route(tools, user_input, knowledge_group, route)
             return WorkflowResult(
-                self.answer_generator.generate_demo(user_input, tracker.data_context, model_error=True),
-                tracker.references,
+                self.answer_generator.generate_demo(user_input, tracker.data_context, model_error=True), tracker.references, tracker
             )
 
         await self._run_tools_for_route(tools, user_input, knowledge_group, route)
         return WorkflowResult(
-            self.answer_generator.generate_demo(user_input, tracker.data_context), tracker.references
+            self.answer_generator.generate_demo(user_input, tracker.data_context), tracker.references, tracker
         )
 
     async def answer_from_context(
@@ -64,7 +65,7 @@ class AgentWorkflow:
     ) -> WorkflowResult:
         """兼容测试和旧调用方的直接上下文路径。"""
         answer = await self.answer_generator.generate_from_context(user_input, data_context)
-        return WorkflowResult(answer, "外部注入上下文（仅用于兼容调用）")
+        return WorkflowResult(answer, "外部注入上下文（仅用于兼容调用）", AgentToolTracker())
 
     async def _resolve_route(
         self, user_input: str, retrieval_mode: RetrievalMode

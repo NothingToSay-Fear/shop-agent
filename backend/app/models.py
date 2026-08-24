@@ -127,17 +127,47 @@ class Message(Base):
 
 
 class ToolCall(Base):
-    """为后续数据源或 Agent 工具调用保留的审计记录。"""
+    """单次 Agent 运行中的受控工具调用审计记录。"""
     __tablename__ = "tool_calls"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     message_id: Mapped[str] = mapped_column(ForeignKey("messages.id"), index=True)
+    run_id: Mapped[str | None] = mapped_column(
+        ForeignKey("agent_runs.id", ondelete="CASCADE"), nullable=True, index=True
+    )
     tool_name: Mapped[str] = mapped_column(String(100), nullable=False)
     input_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     result_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reference_ids: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
     status: Mapped[str] = mapped_column(String(20), nullable=False)
     duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     error_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+
+
+class AgentRun(Base):
+    """一次问答的最小化运行审计，不持久化原始问题和原始回答。"""
+
+    __tablename__ = "agent_runs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    conversation_id: Mapped[str] = mapped_column(ForeignKey("conversations.id"), nullable=False, index=True)
+    user_message_id: Mapped[str] = mapped_column(ForeignKey("messages.id"), nullable=False, index=True)
+    agent_message_id: Mapped[str | None] = mapped_column(
+        ForeignKey("messages.id"), nullable=True, index=True
+    )
+    question_summary: Mapped[str] = mapped_column(String(300), nullable=False)
+    route_mode: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    route_confidence: Mapped[float | None] = mapped_column(Numeric(5, 4), nullable=True)
+    route_fallback: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="running")
+    answer_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reference_ids: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    total_duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

@@ -9,7 +9,7 @@
         │ HTTP / SSE
         ▼
 FastAPI API 服务
- ├── 会话、知识库文件、审计接口
+ ├── 会话、知识库文件、单条回答审计接口
  ├── SQLAlchemy 异步数据访问
  └── OperationAgent（主 Agent）
        ├── 指标 RAG 工具 / 知识库 RAG 工具 / 联网搜索工具
@@ -169,12 +169,31 @@ OperationAgent（流式输出）
 | --- | --- |
 | `conversations` | 会话标题及创建、更新时间 |
 | `messages` | 用户与 Agent 消息、回答状态及数据引用 |
-| `tool_calls` | Agent 工具调用摘要、结果、耗时和错误信息 |
+| `agent_runs` | 每次 Agent 问答的 `run_id`、脱敏摘要、路由、状态、总耗时和引用 ID；保留 15 天 |
+| `tool_calls` | 关联 `run_id` 的工具调用摘要、引用 ID、结果、耗时和错误信息；随运行记录级联清理 |
 | `products` | 内置模拟商品资料，后续可替换为真实商品数据源 |
 | `daily_metrics` | 近 14 天按商品和渠道汇总的模拟经营指标 |
 | `metric_definitions` | 指标名称、描述、别名、依赖、受控模板、公式和 RAG 向量缓存 |
 | `knowledge_documents` | 原始文件元信息、分组、解析正文、处理状态和片段数 |
 | `knowledge_chunks` | 文件片段、PDF 页码、向量与所用模型标识 |
+
+### 4.1 运行审计与可观测性
+
+每次 `POST /api/conversations/{id}/messages` 在保存用户消息后立即创建 `agent_runs` 记录，并将其 `id` 作为本轮 `run_id`。路由完成后写入路由类型、置信度和是否保守降级；三个受控工具在运行时记录实际调用的状态、耗时、结果摘要与引用 ID。回答完成后再关联 Agent 消息、写入回答长度/引用数量摘要和总耗时。
+
+```text
+保存用户消息
+  -> 创建 agent_run（running，问题长度摘要）
+  -> 路由并记录 route
+  -> 工具调用写入内存轨迹（不保存原始问题/全文结果）
+  -> 保存 Agent 回答 + tool_calls + 完成状态
+  -> SSE 返回 message_id、run_id
+  -> 前端按需读取 /messages/{message_id}/audit
+```
+
+工具状态统一为 `success`、`empty`、`skipped` 和 `failed`。例如未配置 Tavily 时，`search_web` 会留下 `status=skipped`、`error_code=web_search_disabled`，因此可直接定位“为什么没有联网搜索”。应用日志同时输出带 `run_id` 的 key-value 摘要，适合通过 `docker compose logs -f api` 检索。
+
+审计表只保存问题/回答的结构化摘要、工具输入/输出摘要和引用 ID：不保存原始问题、回答副本、文档正文、网页正文、向量或密钥。API 启动后执行一次过期清理，并每 24 小时删除创建时间早于 15 天的 `agent_runs`；关联 `tool_calls` 由数据库外键级联删除。
 
 ## 5. 配置原则
 

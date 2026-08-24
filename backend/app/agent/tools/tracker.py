@@ -3,21 +3,86 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from time import perf_counter
 
 from app.services.knowledge_rag import KnowledgeQueryContext
 from app.services.metric_rag import MetricQueryContext
+from app.services.intent_router import RetrievalRoute
 from app.services.web_search import WebSearchContext
+
+
+@dataclass(frozen=True)
+class ToolCallAudit:
+    """一条仅含摘要和引用 ID 的工具调用轨迹。"""
+
+    tool_name: str
+    input_summary: str
+    result_summary: str
+    reference_ids: tuple[str, ...]
+    status: str
+    duration_ms: int
+    error_code: str | None = None
 
 
 @dataclass
 class AgentToolTracker:
-    """收集实际调用的工具依据，供演示回答与会话消息持久化使用。"""
+    """收集实际工具依据和审计摘要，不保存原始提问或工具完整输出。"""
 
     metric_context: MetricQueryContext | None = None
     knowledge_context: KnowledgeQueryContext | None = None
     knowledge_miss: bool = False
     web_context: WebSearchContext | None = None
     web_search_miss: bool = False
+    route: RetrievalRoute | None = None
+    tool_calls: list[ToolCallAudit] | None = None
+
+    def __post_init__(self) -> None:
+        # 使用显式初始化避免 dataclass 可变默认值在多个运行之间共享。
+        if self.tool_calls is None:
+            self.tool_calls = []
+
+    def set_route(self, route: RetrievalRoute) -> None:
+        """记录最终路由，供运行审计关联本次实际编排决策。"""
+        self.route = route
+
+    def start_tool_call(self) -> float:
+        """为工具包装器提供单调时钟起点。"""
+        return perf_counter()
+
+    def record_tool_call(
+        self,
+        *,
+        tool_name: str,
+        input_summary: str,
+        result_summary: str,
+        reference_ids: tuple[str, ...] = (),
+        status: str,
+        started_at: float,
+        error_code: str | None = None,
+    ) -> None:
+        """追加一条脱敏工具轨迹；该方法同时覆盖模型自行调用工具的场景。"""
+        assert self.tool_calls is not None
+        self.tool_calls.append(
+            ToolCallAudit(
+                tool_name=tool_name,
+                input_summary=input_summary,
+                result_summary=result_summary,
+                reference_ids=reference_ids,
+                status=status,
+                duration_ms=max(0, round((perf_counter() - started_at) * 1000)),
+                error_code=error_code,
+            )
+        )
+
+    @property
+    def reference_ids(self) -> list[str]:
+        """去重汇总实际命中的指标、片段和网页链接标识。"""
+        identifiers: list[str] = []
+        for call in self.tool_calls or []:
+            for reference_id in call.reference_ids:
+                if reference_id not in identifiers:
+                    identifiers.append(reference_id)
+        return identifiers
 
     @property
     def data_context(self) -> str | None:
