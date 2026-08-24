@@ -25,6 +25,7 @@ import {
   Space,
   Spin,
   Tag,
+  Tooltip,
   Typography,
   message,
 } from "antd";
@@ -387,9 +388,28 @@ export function App() {
           locale={{ emptyText: "暂无资料" }}
           renderItem={(item) => (
             <List.Item
+              className="knowledge-document-item"
               actions={[
-                <Button key="preview" type="link" icon={<EyeOutlined />} onClick={() => void previewKnowledgeDocument(item.id)}>预览</Button>,
-                <Button key="download" type="link" icon={<DownloadOutlined />} href={api.getKnowledgeDownloadUrl(item.id)}>下载</Button>,
+                <Tooltip key="preview" title="预览">
+                  <Button
+                    aria-label="预览"
+                    type="text"
+                    size="small"
+                    shape="circle"
+                    icon={<EyeOutlined />}
+                    onClick={() => void previewKnowledgeDocument(item.id)}
+                  />
+                </Tooltip>,
+                <Tooltip key="download" title="下载原文件">
+                  <Button
+                    aria-label="下载原文件"
+                    type="text"
+                    size="small"
+                    shape="circle"
+                    icon={<DownloadOutlined />}
+                    href={api.getKnowledgeDownloadUrl(item.id)}
+                  />
+                </Tooltip>,
                 <Popconfirm
                   key="delete"
                   title="删除此知识库文件？"
@@ -398,12 +418,31 @@ export function App() {
                   cancelText="取消"
                   onConfirm={() => void deleteKnowledgeDocument(item)}
                 >
-                  <Button danger type="link" icon={<DeleteOutlined />} loading={deletingDocumentId === item.id}>删除</Button>
+                  <Button
+                    aria-label="删除"
+                    title="删除"
+                    danger
+                    type="text"
+                    size="small"
+                    shape="circle"
+                    icon={<DeleteOutlined />}
+                    loading={deletingDocumentId === item.id}
+                  />
                 </Popconfirm>,
               ]}
             >
               <List.Item.Meta
-                title={<Space><span>{item.title}</span><Tag>{item.group_name}</Tag>{documentStatusTag(item.status)}</Space>}
+                title={
+                  <div className="knowledge-document-title">
+                    <Typography.Text className="knowledge-document-name" ellipsis={{ tooltip: item.title }}>
+                      {item.title}
+                    </Typography.Text>
+                    <Tooltip title={item.group_name}>
+                      <Tag className="knowledge-document-group">{item.group_name}</Tag>
+                    </Tooltip>
+                    {documentStatusTag(item.status)}
+                  </div>
+                }
                 description={`${item.file_type.toUpperCase()} · ${item.chunk_count} 个片段`}
               />
             </List.Item>
