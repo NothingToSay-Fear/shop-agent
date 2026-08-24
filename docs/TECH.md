@@ -132,6 +132,17 @@ SQL 模板存储在表中以便维护指标口径，但执行前必须与后端�
 
 ### Agent 服务
 
+- `OperationAgent` 只负责调用工作流并将最终文本拆分为 SSE 片段；不直接处理路由、工具调用、模型创建或回答文案。
+- `AgentWorkflow` 负责意图路由、创建并按路由调用受控工具、汇总来源，以及在模型失败时触发同一工具结果的兜底路径；`AnswerGenerator` 负责 DeepAgent/LLM 回答与离线演示回答；`PromptBuilder` 只生成系统提示词与路由约束。
+
+```text
+OperationAgent（流式输出）
+  -> AgentWorkflow（路由、工具调用、来源汇总）
+       -> PromptBuilder（系统提示词、工具约束）
+       -> AnswerGenerator（DeepAgent / 演示回答）
+       -> app/agent/tools/（指标、知识库、联网搜索）
+```
+
 - 主 Agent 根据本地语义路由调用 `query_metric_rag`、`query_knowledge_rag`、`search_web` 三个受控工具；前两者自行创建短生命周期数据库会话，不向模型暴露连接或任意 SQL，后者只调用固定的 Tavily 搜索端点。
 - 工具代码按职责位于 `app/agent/tools/`：`metric_rag.py` 负责受控指标查询，`knowledge_rag.py` 负责内部资料检索，`web_search.py` 负责公开网络检索，`tracker.py` 只负责汇总一次调用的依据与来源；`__init__.py` 仅组合工具供 Agent 使用。
 - 涉及活动复盘、经营归因、效果评估和优化建议时，主 Agent 通过 DeepAgent `task` 委派给 `operation_review_agent`；子 Agent 只拥有同一批受控 RAG 与联网搜索工具。项目同时显式覆盖 DeepAgent 默认的 `general-purpose` 子 Agent，防止框架自动附加更宽的能力。
