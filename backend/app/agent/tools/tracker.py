@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from time import perf_counter
 
 from app.services.knowledge_rag import KnowledgeQueryContext
@@ -34,12 +34,8 @@ class AgentToolTracker:
     web_context: WebSearchContext | None = None
     web_search_miss: bool = False
     route: RetrievalRoute | None = None
-    tool_calls: list[ToolCallAudit] | None = None
-
-    def __post_init__(self) -> None:
-        # 使用显式初始化避免 dataclass 可变默认值在多个运行之间共享。
-        if self.tool_calls is None:
-            self.tool_calls = []
+    tool_calls: list[ToolCallAudit] = field(default_factory=list)
+    tool_invocation_counts: dict[str, int] = field(default_factory=dict)
 
     def set_route(self, route: RetrievalRoute) -> None:
         """记录最终路由，供运行审计关联本次实际编排决策。"""
@@ -48,6 +44,14 @@ class AgentToolTracker:
     def start_tool_call(self) -> float:
         """为工具包装器提供单调时钟起点。"""
         return perf_counter()
+
+    def reserve_tool_call(self, tool_name: str, max_calls_per_run: int) -> bool:
+        """为一次真实工具执行预留额度，避免模型在计划完成后重复检索。"""
+        current_count = self.tool_invocation_counts.get(tool_name, 0)
+        if current_count >= max_calls_per_run:
+            return False
+        self.tool_invocation_counts[tool_name] = current_count + 1
+        return True
 
     def record_tool_call(
         self,
@@ -61,7 +65,6 @@ class AgentToolTracker:
         error_code: str | None = None,
     ) -> None:
         """追加一条脱敏工具轨迹；该方法同时覆盖模型自行调用工具的场景。"""
-        assert self.tool_calls is not None
         self.tool_calls.append(
             ToolCallAudit(
                 tool_name=tool_name,
@@ -78,7 +81,7 @@ class AgentToolTracker:
     def reference_ids(self) -> list[str]:
         """去重汇总实际命中的指标、片段和网页链接标识。"""
         identifiers: list[str] = []
-        for call in self.tool_calls or []:
+        for call in self.tool_calls:
             for reference_id in call.reference_ids:
                 if reference_id not in identifiers:
                     identifiers.append(reference_id)

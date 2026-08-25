@@ -75,6 +75,5 @@ async def test_disabled_web_search_is_recorded_as_skipped() -> None:
     result = await tool.ainvoke({"question": "北京今天天气如何？"})
 
     assert "尚未配置" in result
-    assert tracker.tool_calls is not None
     assert tracker.tool_calls[0].status == "skipped"
     assert tracker.tool_calls[0].error_code == "web_search_disabled"

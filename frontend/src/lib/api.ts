@@ -65,6 +65,7 @@ export const api = {
     content: string,
     mode: "hybrid" | "metrics" | "knowledge" | "web",
     knowledgeGroup: string | undefined,
+    onStatus: (content: string, phase: string | undefined) => void,
     onChunk: (chunk: string) => void,
     onDone: (messageId: string) => void,
   ): Promise<void> {
@@ -90,7 +91,8 @@ export const api = {
         const type = event.match(/^event: (.+)$/m)?.[1];
         const data = event.match(/^data: (.+)$/m)?.[1];
         if (!type || !data) continue;
-        const payload = JSON.parse(data) as { content?: string; message_id?: string; message?: string };
+        const payload = JSON.parse(data) as { content?: string; phase?: string; message_id?: string; message?: string };
+        if (type === "status" && payload.content) onStatus(payload.content, payload.phase);
         if (type === "chunk" && payload.content) onChunk(payload.content);
         if (type === "done" && payload.message_id) onDone(payload.message_id);
         if (type === "error") throw new Error(payload.message ?? "生成失败");

@@ -66,6 +66,7 @@ class AgentRunAuditRead(BaseModel):
     status: str
     answer_summary: str | None
     reference_ids: list[str]
+    execution_plan: list[str]
     total_duration_ms: int | None
     error_code: str | None
     created_at: datetime

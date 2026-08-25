@@ -3,6 +3,7 @@
 from langchain_core.tools import BaseTool, tool
 
 from app.agent.tools.tracker import AgentToolTracker
+from app.agent.tools.registry import get_tool_specification
 from app.config import Settings
 from app.database import SessionLocal
 from app.services.metric_rag import query_metrics_for_question
@@ -16,6 +17,17 @@ def build_metric_rag_tool(tracker: AgentToolTracker, settings: Settings) -> Base
         """查询经营指标。适用于 GMV、订单、访客、转化率、客单价、退款、趋势及指定日期范围问题。必须传入用户原始问题，工具只执行经审核的只读 SQL 模板。"""
         started_at = tracker.start_tool_call()
         input_summary = f"问题长度：{len(question.strip())} 个字符"
+        specification = get_tool_specification("query_metric_rag")
+        if not tracker.reserve_tool_call("query_metric_rag", specification.max_calls_per_run):
+            tracker.record_tool_call(
+                tool_name="query_metric_rag",
+                input_summary=input_summary,
+                result_summary="本轮指标查询已执行，拒绝重复调用",
+                status="skipped",
+                started_at=started_at,
+                error_code="tool_call_limit_reached",
+            )
+            return "本轮指标查询已由系统执行，请基于已有受控结果回答，不要重复检索。"
         try:
             async with SessionLocal() as session:
                 context = await query_metrics_for_question(session, question, settings=settings)

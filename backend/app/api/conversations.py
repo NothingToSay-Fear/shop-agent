@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent.operation_agent import OperationAgent
+from app.agent.execution_plan import build_execution_plan_for_mode
 from app.database import get_session
 from app.models import AgentRun, Conversation, Message, ToolCall
 from app.schemas.conversation import (
@@ -94,13 +95,16 @@ async def create_message(
         # 浏览器会立即渲染每个分片，并在收到 `done` 后重新加载持久化消息。
         full_answer = ""
         try:
-            async for fragment in agent.stream(
+            async for event in agent.stream_events(
                 payload.content,
                 knowledge_group=payload.knowledge_group,
                 retrieval_mode=payload.mode,
             ):
-                full_answer += fragment
-                yield _event("chunk", {"content": fragment})
+                if event.event_type == "status":
+                    yield _event("status", {"content": event.content, "phase": event.phase or ""})
+                    continue
+                full_answer += event.content
+                yield _event("chunk", {"content": event.content})
                 await asyncio.sleep(0)
             agent_message = Message(
                 conversation_id=conversation_id,
@@ -114,7 +118,7 @@ async def create_message(
                 update_run_route(run, agent.tool_tracker.route)
             run.agent_message_id = agent_message.id
             complete_run(run, full_answer, agent.tool_tracker, started_at)
-            persist_tool_calls(session, run, agent_message.id, agent.tool_tracker.tool_calls or [])
+            persist_tool_calls(session, run, agent_message.id, agent.tool_tracker.tool_calls)
             await session.commit()
             log_run_completed(run, agent.tool_tracker)
             yield _event("done", {"message_id": agent_message.id, "run_id": run.id})
@@ -125,7 +129,7 @@ async def create_message(
             fail_run(run, started_at)
             session.add(run)
             # 失败前已执行的工具同样需要审计；此时尚无 Agent 消息，关联本轮用户消息。
-            persist_tool_calls(session, run, user_message.id, agent.tool_tracker.tool_calls or [])
+            persist_tool_calls(session, run, user_message.id, agent.tool_tracker.tool_calls)
             await session.commit()
             log_run_failed(run)
             yield _event("error", {"message": "生成回答失败，请稍后重试。"})
@@ -151,6 +155,7 @@ async def get_message_audit(
     )
     if run is None:
         raise HTTPException(status_code=404, detail="未找到该回答的运行审计记录")
+    execution_plan = build_execution_plan_for_mode(run.route_mode)
     calls = list(
         await session.scalars(
             select(ToolCall).where(ToolCall.run_id == run.id).order_by(ToolCall.created_at)
@@ -165,6 +170,7 @@ async def get_message_audit(
         status=run.status,
         answer_summary=run.answer_summary,
         reference_ids=run.reference_ids,
+        execution_plan=list(execution_plan.required_tools) if execution_plan else [],
         total_duration_ms=run.total_duration_ms,
         error_code=run.error_code,
         created_at=run.created_at,

@@ -29,6 +29,7 @@ body { margin: 0; min-width: 1080px; }
 .message-card.agent { margin-right: 40px; }
 .message-title { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
 .message-body { white-space: pre-wrap; line-height: 1.75; }
+.message-progress { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; color: #2563eb; font-size: 13px; }
 .message-reference { display: block; margin-top: 12px; font-size: 12px; }
 .composer { position: relative; z-index: 2; flex: 0 0 auto; display: flex; gap: 12px; align-items: end; padding: 16px 32px 24px; background: #fff; border-top: 1px solid #edf0f5; box-shadow: 0 -6px 18px rgb(15 23 42 / 4%); }
 .composer-knowledge { display: flex; flex-direction: column; gap: 8px; width: 190px; }

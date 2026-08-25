@@ -36,6 +36,7 @@ export interface AgentRunAudit {
   status: string;
   answer_summary: string | null;
   reference_ids: string[];
+  execution_plan: string[];
   total_duration_ms: number | null;
   error_code: string | null;
   created_at: string;

@@ -1,12 +1,24 @@
-"""对外提供流式运营问答入口。"""
+"""对外提供包含执行阶段的流式运营问答入口。"""
 
+import asyncio
 from collections.abc import AsyncIterator
+from dataclasses import dataclass
+from typing import Literal
 
 from app.agent.streaming import split_answer_fragments
 from app.agent.tools import AgentToolTracker
 from app.agent.workflow import AgentWorkflow
 from app.config import Settings, get_settings
 from app.services.intent_router import RetrievalMode
+
+
+@dataclass(frozen=True)
+class AgentStreamEvent:
+    """SSE 层可直接映射的进度或文本分片事件。"""
+
+    event_type: Literal["status", "chunk"]
+    content: str
+    phase: str | None = None
 
 
 class OperationAgent:
@@ -25,12 +37,61 @@ class OperationAgent:
         knowledge_group: str | None = None,
         retrieval_mode: RetrievalMode = "hybrid",
     ) -> AsyncIterator[str]:
-        """执行工作流并将最终回答切分为适合 SSE 推送的片段。"""
-        if data_context is not None:
-            result = await self.workflow.answer_from_context(user_input, data_context)
-        else:
-            result = await self.workflow.answer(user_input, knowledge_group, retrieval_mode)
-        self.data_references = result.data_references
-        self.tool_tracker = result.tracker
-        for fragment in split_answer_fragments(result.answer):
-            yield fragment
+        """保留旧文本分片接口，供既有调用方和测试继续使用。"""
+        async for event in self.stream_events(
+            user_input, data_context, knowledge_group, retrieval_mode
+        ):
+            if event.event_type == "chunk":
+                yield event.content
+
+    async def stream_events(
+        self,
+        user_input: str,
+        data_context: str | None = None,
+        knowledge_group: str | None = None,
+        retrieval_mode: RetrievalMode = "hybrid",
+    ) -> AsyncIterator[AgentStreamEvent]:
+        """并发接收工作流阶段事件，完成后再流式输出回答文本。"""
+        queue: asyncio.Queue[AgentStreamEvent | Exception | object] = asyncio.Queue()
+        completed = object()
+
+        async def publish_status(phase: str, content: str) -> None:
+            await queue.put(AgentStreamEvent("status", content, phase))
+
+        async def execute() -> None:
+            try:
+                if data_context is not None:
+                    await publish_status("generation", "正在整理已提供的上下文…")
+                    result = await self.workflow.answer_from_context(user_input, data_context)
+                else:
+                    result = await self.workflow.answer(
+                        user_input, knowledge_group, retrieval_mode, publish_status
+                    )
+                await queue.put(result)
+            except Exception as error:
+                await queue.put(error)
+            finally:
+                await queue.put(completed)
+
+        task = asyncio.create_task(execute(), name="agent-workflow")
+        try:
+            while True:
+                item = await queue.get()
+                if item is completed:
+                    return
+                if isinstance(item, Exception):
+                    raise item
+                if isinstance(item, AgentStreamEvent):
+                    yield item
+                    continue
+                self.data_references = item.data_references
+                self.tool_tracker = item.tracker
+                for fragment in split_answer_fragments(item.answer):
+                    yield AgentStreamEvent("chunk", fragment)
+        finally:
+            if not task.done():
+                task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass

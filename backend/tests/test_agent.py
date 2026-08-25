@@ -44,3 +44,21 @@ async def test_demo_agent_marks_hybrid_context_as_combined_evidence() -> None:
     assert "综合依据" in answer
     assert "GMV 环比" in answer
     assert "定向券" in answer
+
+
+@pytest.mark.asyncio
+async def test_agent_stream_events_expose_progress_before_answer_chunks() -> None:
+    """前端应能在回答文本前收到不含原文的执行阶段提示。"""
+    agent = OperationAgent(Settings(llm_api_key=None, llm_model=None))
+
+    events = [
+        event
+        async for event in agent.stream_events(
+            "分析本周 GMV 环比下降",
+            "数据来源：内置模拟经营数据。GMV 12,000.00 元，GMV 环比 -8.00%。",
+        )
+    ]
+
+    assert events[0].event_type == "status"
+    assert events[0].phase == "generation"
+    assert any(event.event_type == "chunk" for event in events)

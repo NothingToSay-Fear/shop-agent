@@ -3,6 +3,7 @@
 from langchain_core.tools import BaseTool, tool
 
 from app.agent.tools.tracker import AgentToolTracker
+from app.agent.tools.registry import get_tool_specification
 from app.config import Settings
 from app.database import SessionLocal
 from app.services.knowledge_rag import query_knowledge_for_question
@@ -17,6 +18,17 @@ def build_knowledge_rag_tool(tracker: AgentToolTracker, settings: Settings) -> B
         started_at = tracker.start_tool_call()
         group_summary = group_name.strip() if group_name else "全部分组"
         input_summary = f"问题长度：{len(question.strip())} 个字符；资料分组：{group_summary}"
+        specification = get_tool_specification("query_knowledge_rag")
+        if not tracker.reserve_tool_call("query_knowledge_rag", specification.max_calls_per_run):
+            tracker.record_tool_call(
+                tool_name="query_knowledge_rag",
+                input_summary=input_summary,
+                result_summary="本轮知识库检索已执行，拒绝重复调用",
+                status="skipped",
+                started_at=started_at,
+                error_code="tool_call_limit_reached",
+            )
+            return "本轮知识库检索已由系统执行，请基于已有受控结果回答，不要重复检索。"
         try:
             async with SessionLocal() as session:
                 context = await query_knowledge_for_question(

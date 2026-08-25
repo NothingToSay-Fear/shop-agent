@@ -62,6 +62,7 @@ export function App() {
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(true);
   const [streaming, setStreaming] = useState(false);
+  const [streamingStatus, setStreamingStatus] = useState("");
   const [knowledgeGroup, setKnowledgeGroup] = useState<string>();
   const [knowledgeOpen, setKnowledgeOpen] = useState(false);
   const [knowledgeDocuments, setKnowledgeDocuments] = useState<KnowledgeDocument[]>([]);
@@ -223,6 +224,7 @@ export function App() {
     setMessages((items) => [...items, pendingUser, pendingAgent]);
     setInput("");
     setStreaming(true);
+    setStreamingStatus("正在判断问题类型…");
 
     try {
       await api.streamMessage(
@@ -230,6 +232,7 @@ export function App() {
         trimmedContent,
         "hybrid",
         knowledgeGroup,
+        (content) => setStreamingStatus(content),
         (chunk) => {
           setMessages((items) =>
             items.map((item) => (item.id === "streaming" ? { ...item, content: item.content + chunk } : item)),
@@ -244,6 +247,7 @@ export function App() {
       setMessages((items) => items.filter((item) => item.id !== "streaming"));
     } finally {
       setStreaming(false);
+      setStreamingStatus("");
     }
   }
 
@@ -312,7 +316,10 @@ export function App() {
                     {item.sender_type === "user" ? <UserOutlined /> : <CheckCircleOutlined />}
                     <Typography.Text strong>{item.sender_type === "user" ? "运营人员" : "Shop Agent"}</Typography.Text>
                   </div>
-                  <div className="message-body">{item.content || "正在思考…"}</div>
+                  {item.id === "streaming" && (
+                    <div className="message-progress"><Spin size="small" /> {streamingStatus || "正在处理…"}</div>
+                  )}
+                  <div className="message-body">{item.content || (item.id === "streaming" ? "" : "正在思考…")}</div>
                   {item.sender_type === "agent" && item.data_references && (
                     <Typography.Text type="secondary" className="message-reference">
                       依据：{item.data_references}
@@ -465,6 +472,9 @@ export function App() {
               路由：{auditRecord.route_mode ?? "未记录"}
               {auditRecord.route_confidence !== null && `（置信度 ${auditRecord.route_confidence.toFixed(2)}）`}
               {auditRecord.route_fallback && "；已采用保守降级"}
+            </Typography.Text>
+            <Typography.Text>
+              执行计划：{auditRecord.execution_plan.length > 0 ? auditRecord.execution_plan.join(" → ") : "无需检索工具"}
             </Typography.Text>
             <Typography.Text>
               状态：{auditRecord.status}；总耗时：{auditRecord.total_duration_ms ?? "-"} ms

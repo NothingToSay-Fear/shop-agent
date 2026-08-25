@@ -133,21 +133,24 @@ SQL 模板存储在表中以便维护指标口径，但执行前必须与后端�
 ### Agent 服务
 
 - `OperationAgent` 只负责调用工作流并将最终文本拆分为 SSE 片段；不直接处理路由、工具调用、模型创建或回答文案。
-- `AgentWorkflow` 负责意图路由、创建并按路由调用受控工具、汇总来源，以及在模型失败时触发同一工具结果的兜底路径；`AnswerGenerator` 负责 DeepAgent/LLM 回答与离线演示回答；`PromptBuilder` 只生成系统提示词与路由约束。
+- `AgentWorkflow` 负责意图路由、构造并执行 `ExecutionPlan`、校验工具轨迹和来源，再将已验证上下文交给模型总结；`AnswerGenerator` 负责 DeepAgent/LLM 回答与离线演示回答；`PromptBuilder` 只生成系统提示词与已执行计划约束。
 
 ```text
 OperationAgent（流式输出）
-  -> AgentWorkflow（路由、工具调用、来源汇总）
-       -> PromptBuilder（系统提示词、工具约束）
+  -> AgentWorkflow（路由、执行计划、工具调用、来源校验）
+       -> PromptBuilder（系统提示词、已执行计划约束）
        -> AnswerGenerator（DeepAgent / 演示回答）
-       -> app/agent/tools/（指标、知识库、联网搜索）
+       -> app/agent/execution_plan.py（计划与校验）
+       -> app/agent/tools/（指标、知识库、联网搜索、工具注册表）
 ```
 
-- 主 Agent 根据本地语义路由调用 `query_metric_rag`、`query_knowledge_rag`、`search_web` 三个受控工具；前两者自行创建短生命周期数据库会话，不向模型暴露连接或任意 SQL，后者只调用固定的 Tavily 搜索端点。
-- 工具代码按职责位于 `app/agent/tools/`：`metric_rag.py` 负责受控指标查询，`knowledge_rag.py` 负责内部资料检索，`web_search.py` 负责公开网络检索，`tracker.py` 只负责汇总一次调用的依据与来源；`__init__.py` 仅组合工具供 Agent 使用。
+- 路由首先映射为固定 `ExecutionPlan`：`metrics`、`knowledge`、`web` 分别只执行一个对应工具，`hybrid` 执行指标与知识库工具，`web_hybrid` 执行三者。计划工具按顺序执行，任一工具失败不阻断其他来源。
+- `validate_execution_plan` 要求每个必调工具都有 `success`、`empty`、`skipped` 或 `failed` 终态；`success` 时还必须有与工具匹配的引用 ID（`metric:*`、`knowledge_chunk:*`、HTTP(S) URL）。校验失败时不会调用模型生成事实性结论。
+- 工具注册表位于 `app/agent/tools/registry.py`，声明稳定工具名、每轮最多真实调用次数和引用规则。三个检索工具均限制为每轮一次；模型的重复调用会返回 `tool_call_limit_reached`，不产生第二次数据库查询或联网请求。
+- 前两类工具自行创建短生命周期数据库会话，不向模型暴露连接或任意 SQL；联网工具只调用固定的 Tavily 搜索端点。工具代码按职责位于 `app/agent/tools/`：`metric_rag.py`、`knowledge_rag.py`、`web_search.py` 负责具体检索，`tracker.py` 汇总本轮依据与调用额度，`__init__.py` 仅组合工具供 Agent 使用。
 - 涉及活动复盘、经营归因、效果评估和优化建议时，主 Agent 通过 DeepAgent `task` 委派给 `operation_review_agent`；子 Agent 只拥有同一批受控 RAG 与联网搜索工具。项目同时显式覆盖 DeepAgent 默认的 `general-purpose` 子 Agent，防止框架自动附加更宽的能力。
 - 主 Agent 和两个子 Agent 均把框架文件系统能力限制为只读 `read_file`；不提供文件写入、删除或命令执行工具。
-- 配置 `LLM_API_KEY` 和 `LLM_MODEL` 后使用 DeepAgent 执行 LangChain/LangGraph Agent 流程；模型不可用时，主 Agent 仍按路由调用同一批工具后进入演示回答。
+- 配置 `LLM_API_KEY` 和 `LLM_MODEL` 后使用 DeepAgent 执行 LangChain/LangGraph Agent 流程，但模型只能在系统已完成并校验执行计划后基于受控上下文总结；模型不可用时，主 Agent 使用同一批已执行工具结果进入演示回答。
 - 未配置模型时使用演示模式，保证本地开发和 Docker 验收不依赖密钥。
 - 后续通过工具适配器接入商品、订单、流量及推广数据源；数据结论必须带数据范围与查询时间。
 
@@ -185,6 +188,8 @@ OperationAgent（流式输出）
 保存用户消息
   -> 创建 agent_run（running，问题长度摘要）
   -> 路由并记录 route
+  -> 构造 ExecutionPlan 并执行必调工具
+  -> 校验工具终态、每轮调用上限与成功结果引用 ID
   -> 工具调用写入内存轨迹（不保存原始问题/全文结果）
   -> 保存 Agent 回答 + tool_calls + 完成状态
   -> SSE 返回 message_id、run_id
@@ -194,6 +199,21 @@ OperationAgent（流式输出）
 工具状态统一为 `success`、`empty`、`skipped` 和 `failed`。例如未配置 Tavily 时，`search_web` 会留下 `status=skipped`、`error_code=web_search_disabled`，因此可直接定位“为什么没有联网搜索”。应用日志同时输出带 `run_id` 的 key-value 摘要，适合通过 `docker compose logs -f api` 检索。
 
 审计表只保存问题/回答的结构化摘要、工具输入/输出摘要和引用 ID：不保存原始问题、回答副本、文档正文、网页正文、向量或密钥。API 启动后执行一次过期清理，并每 24 小时删除创建时间早于 15 天的 `agent_runs`；关联 `tool_calls` 由数据库外键级联删除。
+
+### 4.2 执行阶段 SSE 与前端展示
+
+`OperationAgent.stream_events` 通过内存队列将工作流进度转换为 SSE `status` 事件；回答文本仍以原有的 `chunk` 事件发送。进度只包含稳定的阶段文案，不携带用户原文、检索正文或密钥：
+
+```text
+status：正在判断问题类型
+  -> status：已生成执行计划
+  -> status：正在查询经营指标 / 检索资料 / 联网搜索
+  -> status：正在校验检索依据
+  -> status：正在基于已验证依据生成结论
+  -> chunk：回答文本
+```
+
+前端在临时 Agent 消息中展示当前阶段；回答完成后可打开“本次执行依据”，其中的 `execution_plan` 由已持久化路由恢复，并与实际 `tool_calls` 状态并列展示。
 
 ## 5. 配置原则
 
