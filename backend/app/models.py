@@ -29,6 +29,23 @@ class Conversation(Base, TimestampMixin):
     title: Mapped[str] = mapped_column(String(200), nullable=False, default="新会话")
 
 
+class ConversationContext(Base, TimestampMixin):
+    """会话内已确认的查询条件；不保存聊天原文或模型自行推测的内容。"""
+
+    __tablename__ = "conversation_contexts"
+
+    conversation_id: Mapped[str] = mapped_column(
+        ForeignKey("conversations.id", ondelete="CASCADE"), primary_key=True
+    )
+    activity: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    start_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    end_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    metric_hints: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    knowledge_group: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    analysis_goal: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    field_sources: Mapped[dict[str, str]] = mapped_column(JSON, nullable=False, default=dict)
+
+
 class Product(Base, TimestampMixin):
     """用于内容生成与经营数据关联的商品基础资料。"""
 
@@ -162,6 +179,8 @@ class AgentRun(Base):
     route_mode: Mapped[str | None] = mapped_column(String(30), nullable=True)
     route_confidence: Mapped[float | None] = mapped_column(Numeric(5, 4), nullable=True)
     route_fallback: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    context_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    context_actions: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="running")
     answer_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     reference_ids: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)

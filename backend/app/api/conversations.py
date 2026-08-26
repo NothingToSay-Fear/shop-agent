@@ -27,6 +27,7 @@ from app.services.agent_audit import (
     persist_tool_calls,
     update_run_route,
 )
+from app.services.conversation_context import build_and_persist_context
 
 router = APIRouter(prefix="/api/conversations", tags=["conversations"])
 
@@ -78,12 +79,21 @@ async def create_message(
     if conversation.title == "新会话":
         conversation.title = payload.content[:40]
     await session.commit()
+    context_result = await build_and_persist_context(
+        session,
+        conversation_id,
+        user_message.id,
+        payload.content,
+        payload.knowledge_group,
+    )
 
     # 先提交运行起点，确保流式调用中断时仍有可排查的失败轨迹。
     run = AgentRun(
         conversation_id=conversation_id,
         user_message_id=user_message.id,
         question_summary=create_question_summary(payload.content),
+        context_summary=context_result.audit_summary,
+        context_actions=list(context_result.audit_actions),
     )
     session.add(run)
     await session.commit()
@@ -99,6 +109,7 @@ async def create_message(
                 payload.content,
                 knowledge_group=payload.knowledge_group,
                 retrieval_mode=payload.mode,
+                conversation_context=context_result.snapshot,
             ):
                 if event.event_type == "status":
                     yield _event("status", {"content": event.content, "phase": event.phase or ""})
@@ -167,6 +178,8 @@ async def get_message_audit(
         route_mode=run.route_mode,
         route_confidence=float(run.route_confidence) if run.route_confidence is not None else None,
         route_fallback=run.route_fallback,
+        context_summary=run.context_summary,
+        context_actions=run.context_actions,
         status=run.status,
         answer_summary=run.answer_summary,
         reference_ids=run.reference_ids,

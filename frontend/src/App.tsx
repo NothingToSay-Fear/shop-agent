@@ -474,6 +474,14 @@ export function App() {
               {auditRecord.route_fallback && "；已采用保守降级"}
             </Typography.Text>
             <Typography.Text>
+              会话条件：{auditRecord.context_summary ?? "本轮未使用已确认条件"}
+            </Typography.Text>
+            {auditRecord.context_actions.length > 0 && (
+              <Typography.Text type="secondary">
+                条件变更：{auditRecord.context_actions.join("；")}
+              </Typography.Text>
+            )}
+            <Typography.Text>
               执行计划：{auditRecord.execution_plan.length > 0 ? auditRecord.execution_plan.join(" → ") : "无需检索工具"}
             </Typography.Text>
             <Typography.Text>

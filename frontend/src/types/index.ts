@@ -33,6 +33,8 @@ export interface AgentRunAudit {
   route_mode: string | null;
   route_confidence: number | null;
   route_fallback: boolean;
+  context_summary: string | null;
+  context_actions: string[];
   status: string;
   answer_summary: string | null;
   reference_ids: string[];

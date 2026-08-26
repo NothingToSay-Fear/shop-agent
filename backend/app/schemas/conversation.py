@@ -63,6 +63,8 @@ class AgentRunAuditRead(BaseModel):
     route_mode: str | None
     route_confidence: float | None
     route_fallback: bool
+    context_summary: str | None
+    context_actions: list[str]
     status: str
     answer_summary: str | None
     reference_ids: list[str]

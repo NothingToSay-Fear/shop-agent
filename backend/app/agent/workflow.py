@@ -12,6 +12,10 @@ from app.agent.execution_plan import ExecutionPlan, build_execution_plan, valida
 from app.agent.prompt_builder import PromptBuilder
 from app.agent.tools import AgentToolTracker, build_agent_tools
 from app.config import Settings
+from app.services.conversation_context import (
+    ConversationContextSnapshot,
+    build_retrieval_question,
+)
 from app.services.intent_router import RetrievalMode, RetrievalRoute, route_question
 
 StatusCallback = Callable[[str, str], Awaitable[None]]
@@ -39,16 +43,24 @@ class AgentWorkflow:
         knowledge_group: str | None,
         retrieval_mode: RetrievalMode,
         on_status: StatusCallback | None = None,
+        conversation_context: ConversationContextSnapshot | None = None,
     ) -> WorkflowResult:
         """先完成并校验执行计划，再允许模型基于受控结果组织回答。"""
         tracker = AgentToolTracker()
         tools = build_agent_tools(tracker, self.settings)
+        active_context = conversation_context or ConversationContextSnapshot()
+        retrieval_question = build_retrieval_question(user_input, active_context)
+        effective_knowledge_group = knowledge_group or active_context.knowledge_group
+        if active_context.display:
+            await self._emit_status(on_status, "context", "正在应用本会话已确认的查询条件…")
         await self._emit_status(on_status, "routing", "正在判断问题类型…")
-        route = await self._resolve_route(user_input, retrieval_mode)
+        route = await self._resolve_route(retrieval_question, retrieval_mode)
         tracker.set_route(route)
         plan = build_execution_plan(route)
         await self._emit_status(on_status, "plan", f"已生成执行计划：{plan.summary}")
-        await self._run_execution_plan(tools, user_input, knowledge_group, plan, tracker, on_status)
+        await self._run_execution_plan(
+            tools, retrieval_question, effective_knowledge_group, plan, tracker, on_status
+        )
         await self._emit_status(on_status, "verification", "正在校验检索依据…")
         validation = validate_execution_plan(plan, tracker.tool_calls)
         if not validation.passed:
@@ -61,9 +73,11 @@ class AgentWorkflow:
             await self._emit_status(on_status, "generation", "正在基于已验证依据生成结论…")
             answer = await self.answer_generator.generate_with_llm(
                 user_input,
-                PromptBuilder.execution_instruction(plan, knowledge_group, tracker.data_context),
+                PromptBuilder.execution_instruction(
+                    plan, effective_knowledge_group, tracker.data_context, active_context.display
+                ),
                 tools,
-                knowledge_group,
+                effective_knowledge_group,
             )
             if answer is not None:
                 return WorkflowResult(answer, tracker.references, tracker)

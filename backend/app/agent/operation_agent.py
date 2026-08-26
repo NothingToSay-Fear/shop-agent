@@ -9,6 +9,7 @@ from app.agent.streaming import split_answer_fragments
 from app.agent.tools import AgentToolTracker
 from app.agent.workflow import AgentWorkflow
 from app.config import Settings, get_settings
+from app.services.conversation_context import ConversationContextSnapshot
 from app.services.intent_router import RetrievalMode
 
 
@@ -36,10 +37,11 @@ class OperationAgent:
         data_context: str | None = None,
         knowledge_group: str | None = None,
         retrieval_mode: RetrievalMode = "hybrid",
+        conversation_context: ConversationContextSnapshot | None = None,
     ) -> AsyncIterator[str]:
         """保留旧文本分片接口，供既有调用方和测试继续使用。"""
         async for event in self.stream_events(
-            user_input, data_context, knowledge_group, retrieval_mode
+            user_input, data_context, knowledge_group, retrieval_mode, conversation_context
         ):
             if event.event_type == "chunk":
                 yield event.content
@@ -50,6 +52,7 @@ class OperationAgent:
         data_context: str | None = None,
         knowledge_group: str | None = None,
         retrieval_mode: RetrievalMode = "hybrid",
+        conversation_context: ConversationContextSnapshot | None = None,
     ) -> AsyncIterator[AgentStreamEvent]:
         """并发接收工作流阶段事件，完成后再流式输出回答文本。"""
         queue: asyncio.Queue[AgentStreamEvent | Exception | object] = asyncio.Queue()
@@ -65,7 +68,11 @@ class OperationAgent:
                     result = await self.workflow.answer_from_context(user_input, data_context)
                 else:
                     result = await self.workflow.answer(
-                        user_input, knowledge_group, retrieval_mode, publish_status
+                        user_input,
+                        knowledge_group,
+                        retrieval_mode,
+                        publish_status,
+                        conversation_context,
                     )
                 await queue.put(result)
             except Exception as error:

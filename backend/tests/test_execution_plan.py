@@ -4,6 +4,7 @@ import app.agent.workflow as workflow_module
 from app.agent.execution_plan import build_execution_plan, validate_execution_plan
 from app.agent.tools.tracker import AgentToolTracker, ToolCallAudit
 from app.config import Settings
+from app.services.conversation_context import ConversationContextSnapshot
 from app.services.intent_router import RetrievalRoute
 
 
@@ -98,3 +99,46 @@ async def test_workflow_executes_plan_before_real_model_generation(monkeypatch: 
     assert result.answer == "基于受控结果的回答"
     assert events == ["query_metric_rag", "llm"]
     assert result.tracker.reference_ids == ["metric:paid_gmv"]
+
+
+@pytest.mark.asyncio
+async def test_workflow_passes_confirmed_context_to_controlled_tool(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """短问题进入工具前必须附带已确认条件，而不是依赖模型回忆聊天原文。"""
+    captured_payload: dict[str, str | None] = {}
+
+    class FakeTool:
+        name = "query_metric_rag"
+
+        async def ainvoke(self, payload: dict[str, str | None]) -> str:
+            captured_payload.update(payload)
+            tracker.record_tool_call(
+                tool_name="query_metric_rag",
+                input_summary="测试上下文传递",
+                result_summary="命中 1 个经营指标",
+                reference_ids=("metric:paid_order_count",),
+                status="success",
+                started_at=tracker.start_tool_call(),
+            )
+            return "支付订单数：100"
+
+    def fake_build_agent_tools(active_tracker: AgentToolTracker, _: Settings) -> list[FakeTool]:
+        nonlocal tracker
+        tracker = active_tracker
+        return [FakeTool()]
+
+    tracker = AgentToolTracker()
+    monkeypatch.setattr(workflow_module, "build_agent_tools", fake_build_agent_tools)
+    workflow = workflow_module.AgentWorkflow(Settings(llm_api_key=None, llm_model=None))
+    context = ConversationContextSnapshot(
+        activity="618",
+        metric_hints=("支付订单数",),
+    )
+
+    await workflow.answer("再看看订单量", None, "metrics", conversation_context=context)
+
+    assert captured_payload["question"] is not None
+    assert "已确认会话查询条件" in captured_payload["question"]
+    assert "活动=618" in captured_payload["question"]
+    assert "指标=支付订单数" in captured_payload["question"]

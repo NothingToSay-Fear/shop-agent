@@ -14,7 +14,10 @@ class PromptBuilder:
 
     @staticmethod
     def execution_instruction(
-        plan: ExecutionPlan, knowledge_group: str | None, data_context: str | None
+        plan: ExecutionPlan,
+        knowledge_group: str | None,
+        data_context: str | None,
+        conversation_context: str = "",
     ) -> str:
         """将已执行计划和可核验上下文传给模型，禁止其省略或重复事实获取。"""
         group_hint = (
@@ -22,6 +25,8 @@ class PromptBuilder:
         )
         return (
             f"{group_hint}\n"
+            f"本轮已确认并实际用于检索的会话条件：{conversation_context or '无'}。"
+            "若回答依赖这些继承条件，请在结论中简要说明，不能将其改写为用户未确认的事实。\n"
             f"系统已按 `{plan.route_mode}` 路由完成受控执行计划：{plan.summary}。\n"
             "不要重复调用 query_metric_rag、query_knowledge_rag 或 search_web；它们本轮的真实执行次数已受限。"
             "只能基于以下已验证的工具结果陈述数据、资料或外部事实；缺少依据时应明确说明。\n\n"
