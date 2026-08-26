@@ -114,7 +114,7 @@ SQL 模板存储在表中以便维护指标口径，但执行前必须与后端�
 | 数据库 | PostgreSQL | 保存会话、消息、业务数据、指标定义与知识库片段 |
 | ORM | SQLAlchemy、asyncpg、Alembic | 异步访问 PostgreSQL 与管理表结构迁移 |
 | 部署 | Docker、Docker Compose | 单机容器化交付与本地一致运行环境 |
-| 测试 | Pytest、HTTPX | API 与业务逻辑测试 |
+| 测试 | Pytest、HTTPX | API、业务逻辑与固定 Agent 场景评估 |
 
 ## 3. 服务与职责
 
@@ -214,6 +214,26 @@ status：正在判断问题类型
 ```
 
 前端在临时 Agent 消息中展示当前阶段；回答完成后可打开“本次执行依据”，其中的 `execution_plan` 由已持久化路由恢复，并与实际 `tool_calls` 状态并列展示。
+
+### 4.3 固定 Agent 场景评估
+
+`backend/tests/evaluation_cases.py` 定义数据驱动的离线评估集，`test_evaluation_suite.py` 使用真实 `AgentWorkflow`、`ExecutionPlan`、`AgentToolTracker` 和离线演示回答执行每条样例。评估工具是测试替身：它只写入与活动资料一致的最小指标、知识片段或网页摘要，不连接 PostgreSQL、向量模型、Tavily 或 LLM 服务。因此评估结果可重复，不会受数据变动、网络或模型随机性的影响。
+
+首批样例包含 618、七夕、春季三类活动的指标查询、知识库问答与综合复盘，另外覆盖公开网页检索、内外部综合分析、知识库未命中和联网未配置。每条样例统一断言：
+
+- 路由所对应的固定执行计划及工具顺序；
+- 每个计划工具仅有一次实际轨迹；
+- 成功结果的 `metric:*`、`knowledge_chunk:*` 或 HTTP(S) 引用类型；
+- 离线回答中的固定事实提示，或资料不足/联网不可用时的诚实降级文案。
+
+运行命令如下：
+
+```powershell
+cd backend
+python -m pytest tests/test_evaluation_suite.py -q
+```
+
+该评估验证受控编排的回归，不把固定替身误当作真实检索质量评测。指标召回、知识库 Top-K 和 Tavily 请求分别继续由其单元测试覆盖；后续如更换嵌入模型或调整检索阈值，应增加带人工标注答案的真实索引评测。
 
 ## 5. 配置原则
 
