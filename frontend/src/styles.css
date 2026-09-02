@@ -13,6 +13,12 @@ body { margin: 0; min-width: 1080px; }
 .conversation-sider { padding: 20px; border-right: 1px solid #edf0f5; }
 .brand { font-size: 21px; font-weight: 700; margin: 0 0 24px; color: #172554; }
 .brand span { color: #2563eb; }
+.current-user { display: flex; align-items: center; gap: 6px; margin: -12px 0 18px; color: #475569; }
+.current-user .ant-typography { flex: 1; min-width: 0; }
+.auth-page { display: grid; min-height: 100vh; place-items: center; padding: 24px; background: linear-gradient(135deg, #eff6ff, #f8fafc); }
+.auth-card { width: min(420px, 100%); border-radius: 16px; box-shadow: 0 16px 40px rgb(30 64 175 / 12%); }
+.auth-card h2 { margin-bottom: 4px !important; }
+.auth-fields { display: grid; gap: 12px; margin-top: 18px; }
 .sider-label { display: block; margin: 28px 0 8px; font-size: 12px; }
 .knowledge-button { margin-top: 10px; }
 .conversation-item { gap: 10px; border-radius: 8px; padding: 10px !important; cursor: pointer; border-block-end: 0 !important; }

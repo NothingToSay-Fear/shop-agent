@@ -1,5 +1,7 @@
 import type {
   AgentRunAudit,
+  AuthSession,
+  AuthUser,
   Conversation,
   KnowledgeDocument,
   KnowledgeDocumentContent,
@@ -9,20 +11,72 @@ import type {
 
 // Docker 会在构建期注入该地址；本地开发时回退到默认 API 端口。
 const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:8000";
+const ACCESS_TOKEN_STORAGE_KEY = "shop-agent-access-token";
+
+let accessToken = localStorage.getItem(ACCESS_TOKEN_STORAGE_KEY);
+
+function buildHeaders(init?: RequestInit): Headers {
+  const headers = new Headers(init?.headers);
+  if (accessToken) headers.set("Authorization", `Bearer ${accessToken}`);
+  return headers;
+}
+
+function saveAccessToken(token: string | null) {
+  accessToken = token;
+  if (token) localStorage.setItem(ACCESS_TOKEN_STORAGE_KEY, token);
+  else localStorage.removeItem(ACCESS_TOKEN_STORAGE_KEY);
+}
+
+function handleUnauthorized(status: number) {
+  if (status === 401) {
+    saveAccessToken(null);
+    window.dispatchEvent(new Event("shop-agent-auth-expired"));
+  }
+}
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   // 统一处理 REST 请求的 API 基地址、JSON 请求头和异常状态。
-  const response = await fetch(`${API_URL}${path}`, {
-    headers: { "Content-Type": "application/json", ...init?.headers },
-    ...init,
-  });
+  const headers = buildHeaders(init);
+  if (!headers.has("Content-Type")) headers.set("Content-Type", "application/json");
+  const response = await fetch(`${API_URL}${path}`, { ...init, headers });
   if (!response.ok) {
-    throw new Error(`请求失败：${response.status}`);
+    handleUnauthorized(response.status);
+    const payload = (await response.json().catch(() => null)) as { detail?: string } | null;
+    throw new Error(payload?.detail ?? `请求失败：${response.status}`);
   }
   return response.json() as Promise<T>;
 }
 
 export const api = {
+  getAccessToken: () => accessToken,
+  async register(username: string, displayName: string, password: string): Promise<AuthSession> {
+    const session = await request<AuthSession>("/api/auth/register", {
+      method: "POST",
+      body: JSON.stringify({ username, display_name: displayName, password }),
+    });
+    saveAccessToken(session.access_token);
+    return session;
+  },
+  async login(username: string, password: string): Promise<AuthSession> {
+    const session = await request<AuthSession>("/api/auth/login", {
+      method: "POST",
+      body: JSON.stringify({ username, password }),
+    });
+    saveAccessToken(session.access_token);
+    return session;
+  },
+  getCurrentUser: () => request<AuthUser>("/api/auth/me"),
+  async logout(): Promise<void> {
+    const response = await fetch(`${API_URL}/api/auth/logout`, {
+      method: "POST",
+      headers: buildHeaders(),
+    });
+    saveAccessToken(null);
+    if (!response.ok && response.status !== 401) {
+      const payload = (await response.json().catch(() => null)) as { detail?: string } | null;
+      throw new Error(payload?.detail ?? `退出登录失败：${response.status}`);
+    }
+  },
   listConversations: () => request<Conversation[]>("/api/conversations"),
   createConversation: (title = "新会话") =>
     request<Conversation>("/api/conversations", {
@@ -34,7 +88,9 @@ export const api = {
   async resetConversationContext(conversationId: string): Promise<void> {
     const response = await fetch(`${API_URL}/api/conversations/${conversationId}/context`, {
       method: "DELETE",
+      headers: buildHeaders(),
     });
+    handleUnauthorized(response.status);
     if (!response.ok) throw new Error(`重置会话条件失败：${response.status}`);
   },
   getMessageAudit: (conversationId: string, messageId: string) =>
@@ -51,7 +107,11 @@ export const api = {
     const body = new FormData();
     body.append("file", file);
     body.append("group_name", groupName);
-    const response = await fetch(`${API_URL}/api/knowledge/documents`, { method: "POST", body });
+    const response = await fetch(`${API_URL}/api/knowledge/documents`, {
+      method: "POST",
+      headers: buildHeaders(),
+      body,
+    });
     if (!response.ok) {
       const payload = (await response.json().catch(() => null)) as { detail?: string } | null;
       throw new Error(payload?.detail ?? `上传失败：${response.status}`);
@@ -59,7 +119,10 @@ export const api = {
     return response.json() as Promise<KnowledgeDocument>;
   },
   async deleteKnowledgeDocument(documentId: string): Promise<void> {
-    const response = await fetch(`${API_URL}/api/knowledge/documents/${documentId}`, { method: "DELETE" });
+    const response = await fetch(`${API_URL}/api/knowledge/documents/${documentId}`, {
+      method: "DELETE",
+      headers: buildHeaders(),
+    });
     if (!response.ok) {
       const payload = (await response.json().catch(() => null)) as { detail?: string } | null;
       throw new Error(payload?.detail ?? `删除失败：${response.status}`);
@@ -78,10 +141,14 @@ export const api = {
     // 该 SSE 接口是 POST 请求，因此使用 fetch 而非仅支持 GET 的 EventSource。
     const response = await fetch(`${API_URL}/api/conversations/${conversationId}/messages`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...Object.fromEntries(buildHeaders()) },
       body: JSON.stringify({ content, mode, knowledge_group: knowledgeGroup }),
     });
-    if (!response.ok || !response.body) throw new Error("无法建立流式连接");
+    handleUnauthorized(response.status);
+    if (!response.ok || !response.body) {
+      const payload = (await response.json().catch(() => null)) as { detail?: string } | null;
+      throw new Error(payload?.detail ?? "无法建立流式连接");
+    }
 
     const reader = response.body.getReader();
     const decoder = new TextDecoder();

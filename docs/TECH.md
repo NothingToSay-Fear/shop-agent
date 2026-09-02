@@ -9,7 +9,7 @@
         │ HTTP / SSE
         ▼
 FastAPI API 服务
- ├── 会话、知识库文件、单条回答审计接口
+ ├── 本地账号认证、会话、知识库文件、单条回答审计接口
  ├── SQLAlchemy 异步数据访问
  └── OperationAgent（主 Agent）
        ├── 指标 RAG 工具 / 知识库 RAG 工具 / 联网搜索工具
@@ -112,6 +112,7 @@ SQL 模板存储在表中以便维护指标口径，但执行前必须与后端�
 | Agent | DeepAgent、LangChain、LangGraph | Agent 执行、多步骤编排、模型与工具抽象 |
 | 联网检索 | Tavily Search API、HTTPX | 受控获取公开且有时效性的信息；不引入额外 SDK |
 | 数据库 | PostgreSQL | 保存会话、消息、业务数据、指标定义与知识库片段 |
+| 本地认证 | Python 标准库 `hashlib.scrypt`、FastAPI HTTP Bearer | 保存带盐密码散列，签发并校验可撤销的登录令牌；不新增认证依赖 |
 | ORM | SQLAlchemy、asyncpg、Alembic | 异步访问 PostgreSQL 与管理表结构迁移 |
 | 部署 | Docker、Docker Compose | 单机容器化交付与本地一致运行环境 |
 | 测试 | Pytest、HTTPX | API、业务逻辑与固定 Agent 场景评估 |
@@ -126,6 +127,7 @@ SQL 模板存储在表中以便维护指标口径，但执行前必须与后端�
 
 ### API 服务
 
+- 提供账号注册、登录、退出和当前用户接口。浏览器以 `Authorization: Bearer <token>` 调用受保护接口；令牌原文只保存在浏览器本地存储，服务端仅保存 SHA-256 摘要。
 - 保存会话、消息、会话结构化条件、指标定义、知识库文件和检索片段。
 - 将用户输入交给 `OperationAgent`，再以 SSE 转发回答片段。
 - 暴露 `/health` 用于 Docker 健康检查。
@@ -174,6 +176,8 @@ OperationAgent（流式输出）
 | 表 | 用途 |
 | --- | --- |
 | `conversations` | 会话标题及创建、更新时间 |
+| `users` | 本地登录账号、显示名称和 scrypt 密码散列 |
+| `auth_tokens` | 可撤销的登录令牌摘要、归属用户及过期时间 |
 | `conversation_contexts` | 会话内已确认的活动、时间范围、指标提示、资料分组、分析目标及字段来源消息 ID |
 | `messages` | 用户与 Agent 消息、回答状态及数据引用 |
 | `agent_runs` | 每次 Agent 问答的 `run_id`、脱敏摘要、实际采用的结构化上下文快照、会话条件变化、路由、状态、总耗时和引用 ID；保留 15 天 |
@@ -184,7 +188,29 @@ OperationAgent（流式输出）
 | `knowledge_documents` | 原始文件元信息、分组、解析正文、处理状态和片段数 |
 | `knowledge_chunks` | 文件片段、PDF 页码、向量与所用模型标识 |
 
-### 4.1 运行审计与可观测性
+### 4.1 本地账号认证与数据隔离
+
+本期采用最小本地账号体系，而非完整权限系统。注册账号时，后端用随机盐和 Python 标准库 `hashlib.scrypt` 生成密码散列；数据库不保存明文密码。登录成功后生成 32 字节随机访问令牌，数据库仅保存其 SHA-256 摘要及过期时间，默认有效期为 7 天，可由 `AUTH_TOKEN_TTL_DAYS` 修改。退出登录会删除当前摘要记录，因此令牌可立即撤销。
+
+```text
+注册 / 登录
+  -> 验证账号与密码
+  -> 创建 users / auth_tokens 记录
+  -> 返回一次原始 Bearer 令牌
+  -> 浏览器保存令牌并在后续请求携带 Authorization 请求头
+
+访问会话接口
+  -> 校验令牌摘要和过期时间
+  -> 获取 current_user
+  -> 所有 conversations 查询附加 user_id = current_user.id
+  -> 未归属给当前用户的会话统一返回 404
+```
+
+`conversations.user_id` 是会话、消息、会话上下文、Agent 运行审计以及后续长期记忆的根归属字段。知识库文件当前仍是共享工作区资料，不按用户拆分。迁移时已有会话会保留到不可登录的历史归属账户，避免把旧数据错误分配给第一个新注册用户；新账号默认从空会话开始。
+
+这套方案适用于本地和单机 MVP。令牌存于浏览器本地存储，尚未包含 HTTPS 强制、登录频率限制、密码找回、邮箱验证、跨设备会话管理、角色权限或企业 SSO；部署到公网或处理真实敏感数据前，应升级为 HTTPS、HttpOnly Cookie/短期令牌机制并接入成熟身份提供方。
+
+### 4.2 运行审计与可观测性
 
 每次 `POST /api/conversations/{id}/messages` 在保存用户消息后立即创建 `agent_runs` 记录，并将其 `id` 作为本轮 `run_id`。路由完成后写入路由类型、置信度和是否保守降级；三个受控工具在运行时记录实际调用的状态、耗时、结果摘要与引用 ID。回答完成后再关联 Agent 消息、写入回答长度/引用数量摘要和总耗时。
 
@@ -251,6 +277,7 @@ python -m pytest tests/test_evaluation_suite.py -q
 - `DATABASE_URL` 默认指向 Docker Compose 中的 PostgreSQL 服务。
 - `LLM_API_KEY`、`LLM_MODEL` 和可选的 `LLM_BASE_URL` 均通过环境变量配置；不预设任何模型。
 - `WEB_SEARCH_API_KEY` 仅用于 Tavily 联网搜索；为空时该工具关闭，不会隐式访问外部网络。公开网页摘要不自动沉淀为知识库。
+- `AUTH_TOKEN_TTL_DAYS` 控制本地登录令牌有效期，默认 `7`；修改后新签发令牌按新期限生效。
 - `KNOWLEDGE_UPLOAD_DIR` 默认 `/uploads`，由 Docker 映射为宿主机 `uploads/`；上传原件不写入镜像或数据库临时目录。
 - 当前模型适配器采用 OpenAI 兼容协议，因此可配置支持该协议的模型服务地址和模型名称，而不绑定特定厂商；未配置密钥和模型时启用演示模式。
 

@@ -6,6 +6,19 @@ export interface Conversation {
   updated_at: string;
 }
 
+export interface AuthUser {
+  id: string;
+  username: string;
+  display_name: string;
+  created_at: string;
+}
+
+export interface AuthSession {
+  access_token: string;
+  token_type: "bearer";
+  user: AuthUser;
+}
+
 export interface Message {
   id: string;
   conversation_id: string;

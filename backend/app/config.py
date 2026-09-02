@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     web_search_api_key: str | None = None
     web_search_max_results: int = 5
     web_search_timeout_seconds: float = 10.0
+    auth_token_ttl_days: int = 7
     cors_origins: str = "http://localhost:5173"
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")

@@ -21,11 +21,41 @@ class TimestampMixin:
     )
 
 
+class User(Base, TimestampMixin):
+    """可登录的运营用户；会话与长期记忆均以该实体作为隔离边界。"""
+
+    __tablename__ = "users"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    username: Mapped[str] = mapped_column(String(50), unique=True, nullable=False, index=True)
+    display_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    password_hash: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+class AuthToken(Base):
+    """服务端可撤销的登录令牌；数据库仅保存令牌摘要，不保存原始令牌。"""
+
+    __tablename__ = "auth_tokens"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
 class Conversation(Base, TimestampMixin):
     """持久化保存的一条运营讨论会话。"""
     __tablename__ = "conversations"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
     title: Mapped[str] = mapped_column(String(200), nullable=False, default="新会话")
 
 

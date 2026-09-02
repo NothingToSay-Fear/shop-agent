@@ -6,6 +6,7 @@ import {
   DownloadOutlined,
   EyeOutlined,
   FileTextOutlined,
+  LogoutOutlined,
   MessageOutlined,
   PlusOutlined,
   SendOutlined,
@@ -33,6 +34,7 @@ import {
 import { api } from "./lib/api";
 import type {
   AgentRunAudit,
+  AuthUser,
   Conversation,
   KnowledgeDocument,
   KnowledgeDocumentContent,
@@ -74,6 +76,12 @@ export function App() {
   const [previewDocument, setPreviewDocument] = useState<KnowledgeDocumentContent>();
   const [auditOpen, setAuditOpen] = useState(false);
   const [auditRecord, setAuditRecord] = useState<AgentRunAudit>();
+  const [currentUser, setCurrentUser] = useState<AuthUser>();
+  const [authMode, setAuthMode] = useState<"login" | "register">("login");
+  const [username, setUsername] = useState("");
+  const [displayName, setDisplayName] = useState("");
+  const [password, setPassword] = useState("");
+  const [authSubmitting, setAuthSubmitting] = useState(false);
 
   const activeConversation = useMemo(
     () => conversations.find((item) => item.id === activeConversationId),
@@ -81,8 +89,12 @@ export function App() {
   );
 
   useEffect(() => {
-    // 页面首次挂载时只加载一次工作台初始数据。
-    void bootstrap();
+    // 仅在已恢复登录状态后加载用户自己的会话，避免未认证请求访问工作台内容。
+    const handleAuthExpired = () => clearWorkspaceForLogout("登录状态已过期，请重新登录。");
+    window.addEventListener("shop-agent-auth-expired", handleAuthExpired);
+    if (api.getAccessToken()) void restoreSession();
+    else setLoading(false);
+    return () => window.removeEventListener("shop-agent-auth-expired", handleAuthExpired);
   }, []);
 
   useEffect(() => {
@@ -107,6 +119,64 @@ export function App() {
     } finally {
       setLoading(false);
     }
+  }
+
+  async function restoreSession() {
+    try {
+      setCurrentUser(await api.getCurrentUser());
+      await bootstrap();
+    } catch {
+      clearWorkspaceForLogout();
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function submitAuthentication() {
+    if (!username.trim() || !password) {
+      message.warning("请填写账号和密码。");
+      return;
+    }
+    if (authMode === "register" && !displayName.trim()) {
+      message.warning("请填写显示名称。");
+      return;
+    }
+    setAuthSubmitting(true);
+    try {
+      const session = authMode === "register"
+        ? await api.register(username, displayName, password)
+        : await api.login(username, password);
+      setCurrentUser(session.user);
+      setPassword("");
+      setLoading(true);
+      await bootstrap();
+      message.success(authMode === "register" ? "账号创建成功，已登录。" : "登录成功。");
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : "认证失败，请稍后重试。");
+    } finally {
+      setAuthSubmitting(false);
+      setLoading(false);
+    }
+  }
+
+  async function logout() {
+    try {
+      await api.logout();
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : "退出登录失败。");
+    } finally {
+      clearWorkspaceForLogout();
+    }
+  }
+
+  function clearWorkspaceForLogout(notice?: string) {
+    setCurrentUser(undefined);
+    setConversations([]);
+    setActiveConversationId(undefined);
+    setMessages([]);
+    setKnowledgeGroup(undefined);
+    setLoading(false);
+    if (notice) message.warning(notice);
   }
 
   async function loadMessages(conversationId: string) {
@@ -270,10 +340,44 @@ export function App() {
     return <Spin className="page-spinner" size="large" />;
   }
 
+  if (!currentUser) {
+    return (
+      <main className="auth-page">
+        <Card className="auth-card">
+          <Typography.Title level={2}>Shop Agent</Typography.Title>
+          <Typography.Paragraph type="secondary">
+            登录后可访问你自己的会话与后续长期记忆。
+          </Typography.Paragraph>
+          <Space.Compact block>
+            <Button type={authMode === "login" ? "primary" : "default"} onClick={() => setAuthMode("login")}>登录</Button>
+            <Button type={authMode === "register" ? "primary" : "default"} onClick={() => setAuthMode("register")}>注册</Button>
+          </Space.Compact>
+          <section className="auth-fields">
+            <Input value={username} maxLength={50} onChange={(event) => setUsername(event.target.value)} placeholder="账号：字母、数字、_ 或 -" />
+            {authMode === "register" && (
+              <Input value={displayName} maxLength={100} onChange={(event) => setDisplayName(event.target.value)} placeholder="显示名称" />
+            )}
+            <Input.Password value={password} maxLength={128} onChange={(event) => setPassword(event.target.value)} onPressEnter={() => void submitAuthentication()} placeholder="密码至少 8 位" />
+            <Button type="primary" block loading={authSubmitting} onClick={() => void submitAuthentication()}>
+              {authMode === "login" ? "登录" : "创建账号并登录"}
+            </Button>
+          </section>
+        </Card>
+      </main>
+    );
+  }
+
   return (
     <Layout className="app-shell">
       <Sider width={260} theme="light" className="conversation-sider">
         <div className="brand"><span>✦</span> Shop Agent</div>
+        <div className="current-user">
+          <UserOutlined />
+          <Typography.Text ellipsis title={currentUser.display_name}>{currentUser.display_name}</Typography.Text>
+          <Tooltip title="退出登录">
+            <Button type="text" size="small" shape="circle" icon={<LogoutOutlined />} onClick={() => void logout()} />
+          </Tooltip>
+        </div>
         <Button block type="primary" icon={<PlusOutlined />} onClick={() => void createConversation()}>
           新建会话
         </Button>

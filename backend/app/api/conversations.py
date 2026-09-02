@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.agent.operation_agent import OperationAgent
 from app.agent.execution_plan import build_execution_plan_for_mode
 from app.database import get_session
-from app.models import AgentRun, Conversation, ConversationContext, Message, ToolCall
+from app.models import AgentRun, Conversation, ConversationContext, Message, ToolCall, User
 from app.schemas.conversation import (
     AgentRunAuditRead,
     ConversationCreate,
@@ -28,16 +28,19 @@ from app.services.agent_audit import (
     update_run_route,
 )
 from app.services.conversation_context import build_and_persist_context
+from app.services.authentication import get_current_user
 
 router = APIRouter(prefix="/api/conversations", tags=["conversations"])
 
 
 @router.post("", response_model=ConversationRead, status_code=201)
 async def create_conversation(
-    payload: ConversationCreate, session: AsyncSession = Depends(get_session)
+    payload: ConversationCreate,
+    session: AsyncSession = Depends(get_session),
+    current_user: User = Depends(get_current_user),
 ) -> Conversation:
     """创建空会话，并在收到首条用户消息后更新标题。"""
-    conversation = Conversation(title=payload.title)
+    conversation = Conversation(title=payload.title, user_id=current_user.id)
     session.add(conversation)
     await session.commit()
     await session.refresh(conversation)
@@ -45,17 +48,25 @@ async def create_conversation(
 
 
 @router.get("", response_model=list[ConversationRead])
-async def list_conversations(session: AsyncSession = Depends(get_session)) -> list[Conversation]:
-    result = await session.scalars(select(Conversation).order_by(Conversation.updated_at.desc()))
+async def list_conversations(
+    session: AsyncSession = Depends(get_session), current_user: User = Depends(get_current_user)
+) -> list[Conversation]:
+    result = await session.scalars(
+        select(Conversation)
+        .where(Conversation.user_id == current_user.id)
+        .order_by(Conversation.updated_at.desc())
+    )
     return list(result)
 
 
 @router.get("/{conversation_id}/messages", response_model=list[MessageRead])
 async def list_messages(
-    conversation_id: str, session: AsyncSession = Depends(get_session)
+    conversation_id: str,
+    session: AsyncSession = Depends(get_session),
+    current_user: User = Depends(get_current_user),
 ) -> list[Message]:
     """确认父会话存在后，按展示顺序返回消息。"""
-    await _get_conversation(conversation_id, session)
+    await _get_conversation(conversation_id, current_user.id, session)
     result = await session.scalars(
         select(Message).where(Message.conversation_id == conversation_id).order_by(Message.created_at)
     )
@@ -64,10 +75,12 @@ async def list_messages(
 
 @router.delete("/{conversation_id}/context", status_code=204)
 async def reset_conversation_context(
-    conversation_id: str, session: AsyncSession = Depends(get_session)
+    conversation_id: str,
+    session: AsyncSession = Depends(get_session),
+    current_user: User = Depends(get_current_user),
 ) -> None:
     """清除可继承条件；历史消息和运行审计保持不变。"""
-    await _get_conversation(conversation_id, session)
+    await _get_conversation(conversation_id, current_user.id, session)
     context = await session.get(ConversationContext, conversation_id)
     if context is not None:
         await session.delete(context)
@@ -79,9 +92,10 @@ async def create_message(
     conversation_id: str,
     payload: MessageCreate,
     session: AsyncSession = Depends(get_session),
+    current_user: User = Depends(get_current_user),
 ) -> StreamingResponse:
     """保存用户消息，并以 SSE 事件流返回对应的 Agent 回答。"""
-    conversation = await _get_conversation(conversation_id, session)
+    conversation = await _get_conversation(conversation_id, current_user.id, session)
     user_message = Message(
         conversation_id=conversation_id,
         sender_type="user",
@@ -168,9 +182,10 @@ async def get_message_audit(
     conversation_id: str,
     message_id: str,
     session: AsyncSession = Depends(get_session),
+    current_user: User = Depends(get_current_user),
 ) -> AgentRunAuditRead:
     """返回单条 Agent 回答的脱敏运行轨迹，供前端按需展开。"""
-    await _get_conversation(conversation_id, session)
+    await _get_conversation(conversation_id, current_user.id, session)
     run = await session.scalar(
         select(AgentRun).where(
             AgentRun.conversation_id == conversation_id,
@@ -218,9 +233,13 @@ async def get_message_audit(
     )
 
 
-async def _get_conversation(conversation_id: str, session: AsyncSession) -> Conversation:
-    """将未知会话 ID 转换为统一的 HTTP 404 响应。"""
-    conversation = await session.get(Conversation, conversation_id)
+async def _get_conversation(
+    conversation_id: str, user_id: str, session: AsyncSession
+) -> Conversation:
+    """只返回当前用户拥有的会话，避免以 ID 枚举其他用户的数据。"""
+    conversation = await session.scalar(
+        select(Conversation).where(Conversation.id == conversation_id, Conversation.user_id == user_id)
+    )
     if conversation is None:
         raise HTTPException(status_code=404, detail="会话不存在")
     return conversation
