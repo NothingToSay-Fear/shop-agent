@@ -198,6 +198,17 @@ export function App() {
     }
   }
 
+  async function resetConversationContext() {
+    if (!activeConversationId) return;
+    try {
+      await api.resetConversationContext(activeConversationId);
+      setKnowledgeGroup(undefined);
+      message.success("本会话的活动、时间、指标和资料分组条件已重置。");
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : "重置会话条件失败。");
+    }
+  }
+
   async function sendMessage(content = input) {
     const trimmedContent = content.trim();
     if (!trimmedContent || !activeConversationId || streaming) return;
@@ -345,6 +356,15 @@ export function App() {
               onChange={setKnowledgeGroup}
               options={knowledgeGroups.map((group) => ({ value: group.name, label: group.name }))}
             />
+            <Popconfirm
+              title="重置本会话的继承条件？"
+              description="不会删除历史消息或运行审计。"
+              okText="重置"
+              cancelText="取消"
+              onConfirm={() => void resetConversationContext()}
+            >
+              <Button type="link" size="small">重置会话条件</Button>
+            </Popconfirm>
           </div>
           <Input.TextArea
             value={input}

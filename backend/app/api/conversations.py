@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.agent.operation_agent import OperationAgent
 from app.agent.execution_plan import build_execution_plan_for_mode
 from app.database import get_session
-from app.models import AgentRun, Conversation, Message, ToolCall
+from app.models import AgentRun, Conversation, ConversationContext, Message, ToolCall
 from app.schemas.conversation import (
     AgentRunAuditRead,
     ConversationCreate,
@@ -62,6 +62,18 @@ async def list_messages(
     return list(result)
 
 
+@router.delete("/{conversation_id}/context", status_code=204)
+async def reset_conversation_context(
+    conversation_id: str, session: AsyncSession = Depends(get_session)
+) -> None:
+    """清除可继承条件；历史消息和运行审计保持不变。"""
+    await _get_conversation(conversation_id, session)
+    context = await session.get(ConversationContext, conversation_id)
+    if context is not None:
+        await session.delete(context)
+        await session.commit()
+
+
 @router.post("/{conversation_id}/messages")
 async def create_message(
     conversation_id: str,
@@ -94,6 +106,7 @@ async def create_message(
         question_summary=create_question_summary(payload.content),
         context_summary=context_result.audit_summary,
         context_actions=list(context_result.audit_actions),
+        context_snapshot=context_result.snapshot.as_audit_snapshot(),
     )
     session.add(run)
     await session.commit()
@@ -180,6 +193,7 @@ async def get_message_audit(
         route_fallback=run.route_fallback,
         context_summary=run.context_summary,
         context_actions=run.context_actions,
+        context_snapshot=run.context_snapshot,
         status=run.status,
         answer_summary=run.answer_summary,
         reference_ids=run.reference_ids,

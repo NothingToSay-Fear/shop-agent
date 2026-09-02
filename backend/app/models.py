@@ -181,6 +181,7 @@ class AgentRun(Base):
     route_fallback: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     context_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     context_actions: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    context_snapshot: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False, default=dict)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="running")
     answer_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     reference_ids: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)

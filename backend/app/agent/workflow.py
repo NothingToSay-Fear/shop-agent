@@ -59,7 +59,13 @@ class AgentWorkflow:
         plan = build_execution_plan(route)
         await self._emit_status(on_status, "plan", f"已生成执行计划：{plan.summary}")
         await self._run_execution_plan(
-            tools, retrieval_question, effective_knowledge_group, plan, tracker, on_status
+            tools,
+            retrieval_question,
+            effective_knowledge_group,
+            plan,
+            tracker,
+            on_status,
+            active_context,
         )
         await self._emit_status(on_status, "verification", "正在校验检索依据…")
         validation = validate_execution_plan(plan, tracker.tool_calls)
@@ -74,7 +80,10 @@ class AgentWorkflow:
             answer = await self.answer_generator.generate_with_llm(
                 user_input,
                 PromptBuilder.execution_instruction(
-                    plan, effective_knowledge_group, tracker.data_context, active_context.display
+                    plan,
+                    effective_knowledge_group,
+                    tracker.data_context,
+                    active_context.generation_context,
                 ),
                 tools,
                 effective_knowledge_group,
@@ -115,6 +124,7 @@ class AgentWorkflow:
         plan: ExecutionPlan,
         tracker: AgentToolTracker,
         on_status: StatusCallback | None,
+        conversation_context: ConversationContextSnapshot,
     ) -> None:
         """严格按计划执行必调工具；单个工具失败时继续收集其他来源。"""
         tool_by_name = {item.name: item for item in tools}
@@ -124,6 +134,9 @@ class AgentWorkflow:
                 continue
             await AgentWorkflow._emit_status(on_status, "tool", AgentWorkflow._tool_start_message(tool_name))
             payload = {"question": user_input}
+            if tool_name == "query_metric_rag":
+                payload["start_date"] = getattr(conversation_context, "start_date", None)
+                payload["end_date"] = getattr(conversation_context, "end_date", None)
             if tool_name == "query_knowledge_rag":
                 payload["group_name"] = knowledge_group
             try:

@@ -31,6 +31,12 @@ export const api = {
     }),
   listMessages: (conversationId: string) =>
     request<Message[]>(`/api/conversations/${conversationId}/messages`),
+  async resetConversationContext(conversationId: string): Promise<void> {
+    const response = await fetch(`${API_URL}/api/conversations/${conversationId}/context`, {
+      method: "DELETE",
+    });
+    if (!response.ok) throw new Error(`重置会话条件失败：${response.status}`);
+  },
   getMessageAudit: (conversationId: string, messageId: string) =>
     request<AgentRunAudit>(`/api/conversations/${conversationId}/messages/${messageId}/audit`),
   listKnowledgeGroups: () => request<KnowledgeGroup[]>("/api/knowledge/groups"),

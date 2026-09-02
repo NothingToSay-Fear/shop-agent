@@ -1,3 +1,5 @@
+from datetime import date
+
 import pytest
 
 import app.agent.workflow as workflow_module
@@ -133,6 +135,8 @@ async def test_workflow_passes_confirmed_context_to_controlled_tool(
     workflow = workflow_module.AgentWorkflow(Settings(llm_api_key=None, llm_model=None))
     context = ConversationContextSnapshot(
         activity="618",
+        start_date=date(2026, 6, 1),
+        end_date=date(2026, 6, 20),
         metric_hints=("支付订单数",),
     )
 
@@ -142,3 +146,5 @@ async def test_workflow_passes_confirmed_context_to_controlled_tool(
     assert "已确认会话查询条件" in captured_payload["question"]
     assert "活动=618" in captured_payload["question"]
     assert "指标=支付订单数" in captured_payload["question"]
+    assert captured_payload["start_date"] == date(2026, 6, 1)
+    assert captured_payload["end_date"] == date(2026, 6, 20)

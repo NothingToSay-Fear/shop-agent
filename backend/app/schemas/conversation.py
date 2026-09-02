@@ -65,6 +65,7 @@ class AgentRunAuditRead(BaseModel):
     route_fallback: bool
     context_summary: str | None
     context_actions: list[str]
+    context_snapshot: dict[str, object]
     status: str
     answer_summary: str | None
     reference_ids: list[str]

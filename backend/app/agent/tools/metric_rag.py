@@ -1,20 +1,26 @@
 """将受控经营指标 RAG 封装为 Agent 工具。"""
 
+from datetime import date
+
 from langchain_core.tools import BaseTool, tool
 
 from app.agent.tools.tracker import AgentToolTracker
 from app.agent.tools.registry import get_tool_specification
 from app.config import Settings
 from app.database import SessionLocal
-from app.services.metric_rag import query_metrics_for_question
+from app.services.metric_rag import MetricQueryConstraints, query_metrics_for_question
 
 
 def build_metric_rag_tool(tracker: AgentToolTracker, settings: Settings) -> BaseTool:
     """创建仅能执行已审核只读 SQL 模板的指标查询工具。"""
 
     @tool("query_metric_rag")
-    async def query_metric_rag(question: str) -> str:
-        """查询经营指标。适用于 GMV、订单、访客、转化率、客单价、退款、趋势及指定日期范围问题。必须传入用户原始问题，工具只执行经审核的只读 SQL 模板。"""
+    async def query_metric_rag(
+        question: str,
+        start_date: date | None = None,
+        end_date: date | None = None,
+    ) -> str:
+        """查询经营指标。日期条件只能由系统确认后作为结构化参数传入；工具只执行经审核的只读 SQL 模板。"""
         started_at = tracker.start_tool_call()
         input_summary = f"问题长度：{len(question.strip())} 个字符"
         specification = get_tool_specification("query_metric_rag")
@@ -30,7 +36,12 @@ def build_metric_rag_tool(tracker: AgentToolTracker, settings: Settings) -> Base
             return "本轮指标查询已由系统执行，请基于已有受控结果回答，不要重复检索。"
         try:
             async with SessionLocal() as session:
-                context = await query_metrics_for_question(session, question, settings=settings)
+                context = await query_metrics_for_question(
+                    session,
+                    question,
+                    settings=settings,
+                    constraints=MetricQueryConstraints(start_date=start_date, end_date=end_date),
+                )
             tracker.metric_context = context
             if context is None:
                 tracker.record_tool_call(

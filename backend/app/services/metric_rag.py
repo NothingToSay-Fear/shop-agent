@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from datetime import date, timedelta
 from decimal import Decimal
@@ -13,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import Settings, get_settings
 from app.models import DailyMetric, MetricDefinition
 from app.services.local_embeddings import embed_texts
+from app.services.date_ranges import parse_explicit_date_range
 
 # 每个模板均为只读聚合查询，只允许固定的日期和数据源绑定参数。
 SUM_PAID_GMV_SQL = """
@@ -40,12 +40,6 @@ CONTROLLED_SQL_TEMPLATES = frozenset(
     {SUM_PAID_GMV_SQL, SUM_PAID_ORDER_SQL, SUM_VISITOR_SQL, SUM_REFUND_ORDER_SQL}
 )
 
-EXPLICIT_DATE_RANGE_PATTERN = re.compile(
-    r"(?P<year>20\d{2})\s*年\s*(?P<month>\d{1,2})\s*月\s*(?P<day>\d{1,2})\s*日?"
-    r"\s*(?:至|到|~|-)\s*(?:(?P<end_year>20\d{2})\s*年\s*)?"
-    r"(?P<end_month>\d{1,2})\s*月\s*(?P<end_day>\d{1,2})\s*日?"
-)
-
 METRIC_DEFINITION_SEEDS = (
     {
         "metric_code": "paid_gmv",
@@ -60,7 +54,7 @@ METRIC_DEFINITION_SEEDS = (
         "metric_code": "paid_order_count",
         "name": "支付订单数",
         "description": "指定时间范围内已支付的订单总数，用于衡量成交量。",
-        "aliases": ["订单数", "成交订单", "支付订单", "销量"],
+        "aliases": ["订单量", "订单数", "成交订单", "支付订单", "销量"],
         "dependency_codes": [],
         "query_template": SUM_PAID_ORDER_SQL,
         "calculation_formula": None,
@@ -144,6 +138,20 @@ class MetricQueryContext:
     metric_codes: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class MetricQueryConstraints:
+    """由上下文工程提供给指标 SQL 的结构化筛选条件。"""
+
+    start_date: date | None = None
+    end_date: date | None = None
+
+    @property
+    def period(self) -> tuple[date, date] | None:
+        if self.start_date is None or self.end_date is None or self.start_date > self.end_date:
+            return None
+        return self.start_date, self.end_date
+
+
 def cosine_similarity(left: list[float], right: list[float]) -> float:
     """计算同维向量余弦相似度，长度不一致时视为不可比较。"""
     if len(left) != len(right) or not left or not right:
@@ -193,6 +201,7 @@ async def query_metrics_for_question(
     question: str,
     settings: Settings | None = None,
     query_embedding: list[float] | None = None,
+    constraints: MetricQueryConstraints | None = None,
 ) -> MetricQueryContext | None:
     """检索用户需要的指标，补齐依赖后仅执行对应基础指标的受控 SQL。"""
     definitions = list(
@@ -216,7 +225,7 @@ async def query_metrics_for_question(
     definition_map = {definition.metric_code: definition for definition in definitions}
     requested_codes = [item.metric_code for item in requested]
     resolved_codes = _resolve_dependencies(requested_codes, definition_map)
-    period = await _resolve_period(session, question)
+    period = (constraints.period if constraints is not None else None) or await _resolve_period(session, question)
     if period is None:
         return None
     start_date, end_date = period
@@ -310,7 +319,7 @@ def _resolve_dependencies(
 
 async def _resolve_period(session: AsyncSession, question: str) -> tuple[date, date] | None:
     """将当前支持的自然语言时间范围映射为受控日期参数。"""
-    explicit_period = _parse_explicit_date_range(question)
+    explicit_period = parse_explicit_date_range(question)
     if explicit_period is not None:
         return explicit_period
     latest_date = await session.scalar(
@@ -327,22 +336,8 @@ async def _resolve_period(session: AsyncSession, question: str) -> tuple[date, d
 
 
 def _parse_explicit_date_range(question: str) -> tuple[date, date] | None:
-    """解析完整年份的中文日期区间；解析失败时不将用户文本带入 SQL。"""
-    match = EXPLICIT_DATE_RANGE_PATTERN.search(question)
-    if match is None:
-        return None
-    try:
-        start_date = date(
-            int(match["year"]), int(match["month"]), int(match["day"])
-        )
-        end_date = date(
-            int(match["end_year"] or match["year"]),
-            int(match["end_month"]),
-            int(match["end_day"]),
-        )
-    except ValueError:
-        return None
-    return (start_date, end_date) if start_date <= end_date else None
+    """兼容既有调用方；实际解析由统一日期模块完成。"""
+    return parse_explicit_date_range(question)
 
 
 async def _execute_controlled_template(

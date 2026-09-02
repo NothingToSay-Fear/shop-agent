@@ -2,9 +2,11 @@ from datetime import date
 
 from app.services.conversation_context import (
     ConversationContextSnapshot,
+    RecentTurnSummary,
     build_context_snapshot,
     build_retrieval_question,
 )
+from app.services.date_ranges import parse_explicit_date_range
 
 
 def test_context_inherits_activity_period_and_overrides_metric() -> None:
@@ -87,3 +89,51 @@ def test_context_keeps_selected_knowledge_group_and_builds_controlled_query() ->
     assert query.startswith("门槛呢")
     assert "已确认会话查询条件" in query
     assert "618 活动资料" in query
+
+
+def test_short_date_range_overrides_old_activity_without_leaving_conflicting_label() -> None:
+    """用户只指定新日期时，不得继续显示并继承旧活动标签。"""
+    previous = ConversationContextSnapshot(
+        activity="618",
+        start_date=date(2026, 6, 1),
+        end_date=date(2026, 6, 20),
+    )
+
+    result = build_context_snapshot(previous, "查询 8/16–8/22 的 GMV", None, "message-7")
+
+    assert result.snapshot.activity is None
+    assert (result.snapshot.start_date, result.snapshot.end_date) == (
+        date(2026, 8, 16),
+        date(2026, 8, 22),
+    )
+    assert "活动" in result.cleared_fields
+
+
+def test_date_range_parser_accepts_common_operator_formats() -> None:
+    """上下文与指标服务应共享对常见运营日期写法的支持。"""
+    assert parse_explicit_date_range("8/16–8/22") == (date(2026, 8, 16), date(2026, 8, 22))
+    assert parse_explicit_date_range("8月16日到8月22日") == (date(2026, 8, 16), date(2026, 8, 22))
+    assert parse_explicit_date_range("2026-08-16 至 2026-08-22") == (
+        date(2026, 8, 16),
+        date(2026, 8, 22),
+    )
+
+
+def test_context_can_be_cleared_and_recent_turn_stays_out_of_retrieval_query() -> None:
+    """重置条件后不应遗留范围；上一轮结论只能作为回答层的受限上下文。"""
+    previous = ConversationContextSnapshot(
+        activity="七夕",
+        start_date=date(2026, 8, 10),
+        end_date=date(2026, 8, 22),
+        metric_hints=("支付 GMV",),
+        recent_turn=RecentTurnSummary("run-1", "GMV 环比下降 8%。", ("metric:paid_gmv",)),
+    )
+
+    assert "上一轮结论摘要" not in build_retrieval_question("为什么下降", previous)
+    assert "上一轮结论摘要" in previous.generation_context
+
+    result = build_context_snapshot(previous, "清除会话条件", None, "message-8")
+
+    assert result.snapshot.display == ""
+    assert result.snapshot.metric_hints == ()
+    assert result.snapshot.recent_turn is None
