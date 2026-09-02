@@ -20,8 +20,8 @@ def upgrade() -> None:
         """
         UPDATE metric_definitions
         SET aliases = CASE
-            WHEN aliases @> '[\"订单量\"]'::jsonb THEN aliases
-            ELSE aliases || '[\"订单量\"]'::jsonb
+            WHEN aliases::jsonb @> '[\"订单量\"]'::jsonb THEN aliases
+            ELSE (aliases::jsonb || '[\"订单量\"]'::jsonb)::json
         END
         WHERE metric_code = 'paid_order_count'
         """
