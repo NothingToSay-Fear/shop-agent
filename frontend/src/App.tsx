@@ -40,6 +40,7 @@ import type {
   KnowledgeDocumentContent,
   KnowledgeGroup,
   Message,
+  MemoryCandidate,
 } from "./types";
 
 const { Sider, Content } = Layout;
@@ -49,6 +50,16 @@ const examples = [
   "生成一份秋季上新活动方案",
   "为商品 A 写 3 个小红书标题",
 ];
+
+const memoryTypeOptions: { value: MemoryCandidate["memory_type"]; label: string }[] = [
+  { value: "analysis_preference", label: "分析习惯" },
+  { value: "answer_preference", label: "回答偏好" },
+  { value: "focus_topic", label: "关注主题" },
+];
+
+function memoryTypeLabel(memoryType: MemoryCandidate["memory_type"]) {
+  return memoryTypeOptions.find((item) => item.value === memoryType)?.label ?? memoryType;
+}
 
 function documentStatusTag(status: string) {
   if (status === "ready") return <Tag color="success">索引已完成，可检索</Tag>;
@@ -82,6 +93,8 @@ export function App() {
   const [displayName, setDisplayName] = useState("");
   const [password, setPassword] = useState("");
   const [authSubmitting, setAuthSubmitting] = useState(false);
+  const [memoryCandidates, setMemoryCandidates] = useState<MemoryCandidate[]>([]);
+  const [resolvingMemoryCandidateId, setResolvingMemoryCandidateId] = useState<string>();
 
   const activeConversation = useMemo(
     () => conversations.find((item) => item.id === activeConversationId),
@@ -99,7 +112,10 @@ export function App() {
 
   useEffect(() => {
     // 切换会话时刷新该会话已持久化的消息记录。
-    if (activeConversationId) void loadMessages(activeConversationId);
+    if (activeConversationId) {
+      void loadMessages(activeConversationId);
+      void loadMemoryCandidates(activeConversationId);
+    }
   }, [activeConversationId]);
 
   async function bootstrap() {
@@ -175,6 +191,7 @@ export function App() {
     setActiveConversationId(undefined);
     setMessages([]);
     setKnowledgeGroup(undefined);
+    setMemoryCandidates([]);
     setLoading(false);
     if (notice) message.warning(notice);
   }
@@ -184,6 +201,14 @@ export function App() {
       setMessages(await api.listMessages(conversationId));
     } catch {
       message.error("加载会话失败。");
+    }
+  }
+
+  async function loadMemoryCandidates(conversationId: string) {
+    try {
+      setMemoryCandidates(await api.listMemoryCandidates(conversationId));
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : "加载记忆候选失败。");
     }
   }
 
@@ -208,6 +233,23 @@ export function App() {
       setKnowledgeGroups(groups);
     } catch {
       message.error("加载知识库失败。");
+    }
+  }
+
+  async function resolveMemoryCandidate(candidate: MemoryCandidate, action: "accept" | "dismiss") {
+    setResolvingMemoryCandidateId(candidate.id);
+    try {
+      if (action === "accept") {
+        await api.acceptMemoryCandidate(candidate.id);
+        message.success("已记住，会在后续相关问题中参考。");
+      } else {
+        await api.dismissMemoryCandidate(candidate.id);
+      }
+      setMemoryCandidates((items) => items.filter((item) => item.id !== candidate.id));
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : "处理记忆候选失败。");
+    } finally {
+      setResolvingMemoryCandidateId(undefined);
     }
   }
 
@@ -319,6 +361,12 @@ export function App() {
             items.map((item) => (item.id === "streaming" ? { ...item, content: item.content + chunk } : item)),
           );
         },
+        (candidate) => {
+          setMemoryCandidates((items) => [
+            ...items.filter((item) => item.id !== candidate.id),
+            candidate,
+          ]);
+        },
         () => undefined,
       );
       // 收到 `done` 后重新加载，用数据库生成的 ID 和时间替换临时消息。
@@ -425,7 +473,11 @@ export function App() {
             </section>
           ) : (
             <section className="messages">
-              {messages.map((item) => (
+              {messages.map((item) => {
+                const candidate = item.sender_type === "agent"
+                  ? memoryCandidates.find((value) => value.agent_message_id === item.id)
+                  : undefined;
+                return (
                 <Card key={item.id} className={`message-card ${item.sender_type}`} size="small">
                   <div className="message-title">
                     {item.sender_type === "user" ? <UserOutlined /> : <CheckCircleOutlined />}
@@ -445,8 +497,35 @@ export function App() {
                       查看本次执行依据
                     </Button>
                   )}
+                  {candidate && (
+                    <section className="memory-candidate">
+                      <Typography.Text type="secondary">
+                        检测到你可能希望长期保留这项偏好：{candidate.content}
+                      </Typography.Text>
+                      <Space size={8}>
+                        <Button
+                          type="link"
+                          size="small"
+                          loading={resolvingMemoryCandidateId === candidate.id}
+                          onClick={() => void resolveMemoryCandidate(candidate, "accept")}
+                        >
+                          记住
+                        </Button>
+                        <Button
+                          type="link"
+                          size="small"
+                          disabled={resolvingMemoryCandidateId === candidate.id}
+                          onClick={() => void resolveMemoryCandidate(candidate, "dismiss")}
+                        >
+                          暂不
+                        </Button>
+                        <Tag>{memoryTypeLabel(candidate.memory_type)}</Tag>
+                      </Space>
+                    </section>
+                  )}
                 </Card>
-              ))}
+                );
+              })}
             </section>
           )}
         </main>
@@ -600,6 +679,12 @@ export function App() {
             <Typography.Text>
               会话条件：{auditRecord.context_summary ?? "本轮未使用已确认条件"}
             </Typography.Text>
+            <Typography.Text>
+              长期记忆：{auditRecord.memory_summary ?? "本轮未采用长期记忆"}
+            </Typography.Text>
+            {auditRecord.memory_ids.length > 0 && (
+              <Typography.Text type="secondary">记忆 ID：{auditRecord.memory_ids.join("、")}</Typography.Text>
+            )}
             {auditRecord.context_actions.length > 0 && (
               <Typography.Text type="secondary">
                 条件变更：{auditRecord.context_actions.join("；")}

@@ -37,6 +37,8 @@ body { margin: 0; min-width: 1080px; }
 .message-body { white-space: pre-wrap; line-height: 1.75; }
 .message-progress { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; color: #2563eb; font-size: 13px; }
 .message-reference { display: block; margin-top: 12px; font-size: 12px; }
+.memory-candidate { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 14px; padding: 8px 12px; border: 1px solid #dbeafe; border-radius: 8px; background: #f8fbff; }
+.memory-candidate .ant-typography { min-width: 0; }
 .composer { position: relative; z-index: 2; flex: 0 0 auto; display: flex; gap: 12px; align-items: end; padding: 16px 32px 24px; background: #fff; border-top: 1px solid #edf0f5; box-shadow: 0 -6px 18px rgb(15 23 42 / 4%); }
 .composer-knowledge { display: flex; flex-direction: column; gap: 8px; width: 190px; }
 .composer-knowledge .ant-select { width: 100%; }

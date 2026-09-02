@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 from time import perf_counter
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -29,8 +30,10 @@ from app.services.agent_audit import (
 )
 from app.services.conversation_context import build_and_persist_context
 from app.services.authentication import get_current_user
+from app.services.user_memory import MemoryService
 
 router = APIRouter(prefix="/api/conversations", tags=["conversations"])
+logger = logging.getLogger("uvicorn.error")
 
 
 @router.post("", response_model=ConversationRead, status_code=201)
@@ -105,6 +108,15 @@ async def create_message(
     if conversation.title == "新会话":
         conversation.title = payload.content[:40]
     await session.commit()
+    command_result = await MemoryService.handle_explicit_command(
+        session, current_user.id, payload.content
+    )
+    if command_result is not None:
+        return StreamingResponse(
+            _memory_command_event_stream(session, conversation_id, command_result.message),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache"},
+        )
     context_result = await build_and_persist_context(
         session,
         conversation_id,
@@ -112,6 +124,8 @@ async def create_message(
         payload.content,
         payload.knowledge_group,
     )
+    memory_context = await MemoryService.retrieve_for_query(session, current_user.id, payload.content)
+    await MemoryService.record_context_usage(session, current_user.id, memory_context)
 
     # 先提交运行起点，确保流式调用中断时仍有可排查的失败轨迹。
     run = AgentRun(
@@ -121,6 +135,8 @@ async def create_message(
         context_summary=context_result.audit_summary,
         context_actions=list(context_result.audit_actions),
         context_snapshot=context_result.snapshot.as_audit_snapshot(),
+        memory_summary=memory_context.audit_summary,
+        memory_ids=memory_context.ids,
     )
     session.add(run)
     await session.commit()
@@ -137,6 +153,7 @@ async def create_message(
                 knowledge_group=payload.knowledge_group,
                 retrieval_mode=payload.mode,
                 conversation_context=context_result.snapshot,
+                user_memory_context=memory_context,
             ):
                 if event.event_type == "status":
                     yield _event("status", {"content": event.content, "phase": event.phase or ""})
@@ -159,6 +176,36 @@ async def create_message(
             persist_tool_calls(session, run, agent_message.id, agent.tool_tracker.tool_calls)
             await session.commit()
             log_run_completed(run, agent.tool_tracker)
+            try:
+                candidate = await MemoryService.create_candidate_if_eligible(
+                    session,
+                    current_user.id,
+                    conversation_id,
+                    user_message.id,
+                    agent_message.id,
+                    payload.content,
+                )
+            except Exception:
+                # 候选确认不属于回答主链路；失败时不回滚已完成的 Agent 回答和审计。
+                await session.rollback()
+                logger.exception("memory_candidate_creation_failed")
+                candidate = None
+            if candidate is not None:
+                yield _event(
+                    "memory_candidate",
+                    {
+                        "candidate": {
+                            "id": candidate.id,
+                            "conversation_id": candidate.conversation_id,
+                            "source_message_id": candidate.source_message_id,
+                            "agent_message_id": candidate.agent_message_id,
+                            "memory_type": candidate.memory_type,
+                            "content": candidate.content,
+                            "confidence": float(candidate.confidence),
+                            "created_at": candidate.created_at.isoformat(),
+                        }
+                    },
+                )
             yield _event("done", {"message_id": agent_message.id, "run_id": run.id})
         except Exception:
             await session.rollback()
@@ -209,6 +256,8 @@ async def get_message_audit(
         context_summary=run.context_summary,
         context_actions=run.context_actions,
         context_snapshot=run.context_snapshot,
+        memory_summary=run.memory_summary,
+        memory_ids=run.memory_ids,
         status=run.status,
         answer_summary=run.answer_summary,
         reference_ids=run.reference_ids,
@@ -245,6 +294,23 @@ async def _get_conversation(
     return conversation
 
 
-def _event(event: str, payload: dict[str, str]) -> str:
+async def _memory_command_event_stream(
+    session: AsyncSession, conversation_id: str, response: str
+):
+    """将显式记忆命令作为普通 Agent 消息返回，但不创建无意义的 AgentRun。"""
+    agent_message = Message(
+        conversation_id=conversation_id,
+        sender_type="agent",
+        content=response,
+        data_references="用户长期记忆",
+        status="memory_command",
+    )
+    session.add(agent_message)
+    await session.commit()
+    yield _event("chunk", {"content": response})
+    yield _event("done", {"message_id": agent_message.id})
+
+
+def _event(event: str, payload: dict[str, object]) -> str:
     """编码单条服务端推送事件，避免 Agent 层感知传输协议细节。"""
     return f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"

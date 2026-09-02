@@ -66,6 +66,8 @@ class AgentRunAuditRead(BaseModel):
     context_summary: str | None
     context_actions: list[str]
     context_snapshot: dict[str, object]
+    memory_summary: str | None
+    memory_ids: list[str]
     status: str
     answer_summary: str | None
     reference_ids: list[str]

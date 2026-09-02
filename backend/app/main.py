@@ -5,7 +5,7 @@ import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import auth, conversations, knowledge, metrics
+from app.api import auth, conversations, knowledge, memory_candidates, metrics
 from app.config import get_settings
 from app.database import SessionLocal, close_database, create_tables
 from app.services.local_embeddings import preload_model
@@ -57,6 +57,7 @@ app.add_middleware(
 )
 app.include_router(conversations.router)
 app.include_router(auth.router)
+app.include_router(memory_candidates.router)
 app.include_router(knowledge.router)
 app.include_router(metrics.router)
 

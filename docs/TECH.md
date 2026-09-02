@@ -217,6 +217,10 @@ OperationAgent（流式输出）
 在创建运行记录前，API 会先调用 `ContextBuilder`：读取 `conversation_contexts`，提取本轮用户明确出现的条件，按“当前轮覆盖旧值、未出现则继承、显式日期优先于已登记活动期”的规则生成条件快照，并写回会话。仅有新日期且未提活动时会清除旧活动标签，避免出现矛盾范围。快照随运行记录保存为条件摘要、变化动作和结构化 JSON；前端审计抽屉可直接查看。它不保存历史问题副本，字段来源仅保存消息 ID。
 
 ```text
+显式“记住 / 忘记 / 清除所有记忆”命令
+  -> 在用户域内直接新增、删除或清空记忆
+  -> 保存一条 memory_command 消息并结束，不创建 AgentRun
+
 保存用户消息
   -> ContextBuilder 合并条件 + 读取上一轮受限结论摘要
   -> 创建 agent_run（running，问题长度摘要、结构化上下文快照）
@@ -324,6 +328,37 @@ docker compose logs -f db
 - `db` 输出 PostgreSQL 的启动与数据库错误日志。
 
 健康检查与服务状态可通过 `docker compose ps` 和 `http://localhost:8000/health` 确认。
+
+## 9. 用户长期记忆
+
+长期记忆采用独立的 `user_memories` 表，以 `user_id` 为隔离边界，不复用 `messages` 或 `conversation_contexts` 存储。它保存用户确认过的偏好，而不是业务事实：
+
+- `analysis_preference`：分析习惯，例如复盘时优先按渠道、品类拆分；
+- `answer_preference`：回答呈现偏好，例如结论先行、保持简洁；
+- `focus_topic`：关注主题，例如大促活动复盘。
+
+不包含指标口径偏好、指标数值、业务数据、完整聊天记录或知识库正文。前端不再提供独立的“我的记忆”管理抽屉；用户可在对话中输入“记住 …”“忘记 …”“清除所有记忆”。显式命令在 `MemoryService` 内直接处理，不调用 Agent、RAG、受控 SQL 或联网搜索。
+
+系统另以 `user_memory_candidates` 保存自然表达产生的 `pending` 候选。普通问答完成并落库后，服务仅根据有限且可解释的偏好句式生成候选；指标和业务数据关键词会被拒绝。候选通过已认证的 `GET /api/memory-candidates` 获取，`POST /api/memory-candidates/{id}/accept` 才会转为 `user_memories`，`dismiss` 只标记忽略。所有读写均带 `user_id = current_user.id`；跨用户 ID 访问统一返回 404。
+
+```text
+保存用户消息
+  -> ContextBuilder 更新当前会话短期条件
+  -> MemoryService 读取当前用户 active 且未过期的记忆
+  -> 轻量排序并最多选择 3 条
+  -> 记忆使用次数与最后采用时间随本轮事务更新
+  -> Agent 路由和受控工具仍只使用原问题 + 会话条件
+  -> 仅在回答生成提示词中注入长期偏好
+  -> agent_runs 保存采用数量摘要和记忆 ID
+  -> 回答落库后从自然偏好表达生成 pending 候选（如有）
+  -> SSE 推送候选，前端在对应回答下方展示“记住 / 暂不”
+```
+
+对于通常数量很小的用户偏好，首期不引入向量化或额外模型：回答偏好始终优先，分析习惯在“分析、复盘、对比、诊断、原因、建议、优化”等问题中优先，关注主题按文本命中和最近更新时间排序。候选提取同样采用有限规则，而非调用模型，避免为一次偏好确认额外增加时延、费用或误存风险。
+
+`PromptBuilder` 明确约束长期偏好只能影响回答呈现、分析角度或建议优先级，不能覆盖本轮问题、会话活动/时间/指标条件，更不能作为业务事实、数据或指标口径。即使使用长期记忆，受控 SQL、指标 RAG 与知识库 RAG 的检索入参都不会改变。
+
+`agent_runs.memory_summary` 只保存“采用了几条长期记忆”，`memory_ids` 保存本轮采用的记录 ID；记忆正文仍只保留在用户自己的 `user_memories.content`。运行审计的 15 天清理不会删除长期记忆；用户删除记忆后，历史运行记录仍可保留其 ID 以便复盘。`user_memory_candidates` 是待确认交互记录，不参与召回；“清除所有记忆”会同时忽略仍待确认的候选。
 
 ## 8. 后续演进
 

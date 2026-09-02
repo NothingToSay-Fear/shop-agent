@@ -19,6 +19,19 @@ export interface AuthSession {
   user: AuthUser;
 }
 
+export type UserMemoryType = "analysis_preference" | "answer_preference" | "focus_topic";
+
+export interface MemoryCandidate {
+  id: string;
+  conversation_id: string;
+  source_message_id: string;
+  agent_message_id: string;
+  memory_type: UserMemoryType;
+  content: string;
+  confidence: number;
+  created_at: string;
+}
+
 export interface Message {
   id: string;
   conversation_id: string;
@@ -49,6 +62,8 @@ export interface AgentRunAudit {
   context_summary: string | null;
   context_actions: string[];
   context_snapshot: Record<string, unknown>;
+  memory_summary: string | null;
+  memory_ids: string[];
   status: string;
   answer_summary: string | null;
   reference_ids: string[];

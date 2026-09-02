@@ -17,6 +17,7 @@ from app.services.conversation_context import (
     build_retrieval_question,
 )
 from app.services.intent_router import RetrievalMode, RetrievalRoute, route_question
+from app.services.user_memory import UserMemoryContext
 
 StatusCallback = Callable[[str, str], Awaitable[None]]
 
@@ -44,15 +45,19 @@ class AgentWorkflow:
         retrieval_mode: RetrievalMode,
         on_status: StatusCallback | None = None,
         conversation_context: ConversationContextSnapshot | None = None,
+        user_memory_context: UserMemoryContext | None = None,
     ) -> WorkflowResult:
         """先完成并校验执行计划，再允许模型基于受控结果组织回答。"""
         tracker = AgentToolTracker()
         tools = build_agent_tools(tracker, self.settings)
         active_context = conversation_context or ConversationContextSnapshot()
+        active_memory_context = user_memory_context or UserMemoryContext()
         retrieval_question = build_retrieval_question(user_input, active_context)
         effective_knowledge_group = knowledge_group or active_context.knowledge_group
         if active_context.display:
             await self._emit_status(on_status, "context", "正在应用本会话已确认的查询条件…")
+        if active_memory_context.items:
+            await self._emit_status(on_status, "memory", "正在应用你的长期偏好…")
         await self._emit_status(on_status, "routing", "正在判断问题类型…")
         route = await self._resolve_route(retrieval_question, retrieval_mode)
         tracker.set_route(route)
@@ -84,6 +89,7 @@ class AgentWorkflow:
                     effective_knowledge_group,
                     tracker.data_context,
                     active_context.generation_context,
+                    active_memory_context.display,
                 ),
                 tools,
                 effective_knowledge_group,

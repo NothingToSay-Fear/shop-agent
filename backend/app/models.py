@@ -48,6 +48,54 @@ class AuthToken(Base):
     )
 
 
+class UserMemory(Base, TimestampMixin):
+    """用户主动维护的跨会话偏好，不保存指标口径、业务数据或完整聊天记录。"""
+
+    __tablename__ = "user_memories"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    memory_type: Mapped[str] = mapped_column(String(30), nullable=False, index=True)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    structured_data: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False, default=dict)
+    source: Mapped[str] = mapped_column(String(30), nullable=False, default="user_explicit")
+    confidence: Mapped[Decimal] = mapped_column(Numeric(3, 2), nullable=False, default=Decimal("1.00"))
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="active", index=True)
+    use_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class UserMemoryCandidate(Base):
+    """从用户自然表达中提取的候选偏好，确认前不会进入 Agent 上下文。"""
+
+    __tablename__ = "user_memory_candidates"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    conversation_id: Mapped[str] = mapped_column(
+        ForeignKey("conversations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    source_message_id: Mapped[str] = mapped_column(
+        ForeignKey("messages.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    agent_message_id: Mapped[str] = mapped_column(
+        ForeignKey("messages.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    memory_type: Mapped[str] = mapped_column(String(30), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    confidence: Mapped[Decimal] = mapped_column(Numeric(3, 2), nullable=False, default=Decimal("0.85"))
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending", index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class Conversation(Base, TimestampMixin):
     """持久化保存的一条运营讨论会话。"""
     __tablename__ = "conversations"
@@ -212,6 +260,8 @@ class AgentRun(Base):
     context_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     context_actions: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
     context_snapshot: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False, default=dict)
+    memory_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    memory_ids: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="running")
     answer_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     reference_ids: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)

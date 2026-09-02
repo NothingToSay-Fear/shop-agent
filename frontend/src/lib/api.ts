@@ -7,6 +7,7 @@ import type {
   KnowledgeDocumentContent,
   KnowledgeGroup,
   Message,
+  MemoryCandidate,
 } from "../types";
 
 // Docker 会在构建期注入该地址；本地开发时回退到默认 API 端口。
@@ -77,6 +78,21 @@ export const api = {
       throw new Error(payload?.detail ?? `退出登录失败：${response.status}`);
     }
   },
+  listMemoryCandidates: (conversationId: string) =>
+    request<MemoryCandidate[]>(`/api/memory-candidates?conversation_id=${encodeURIComponent(conversationId)}`),
+  async resolveMemoryCandidate(candidateId: string, action: "accept" | "dismiss"): Promise<void> {
+    const response = await fetch(`${API_URL}/api/memory-candidates/${candidateId}/${action}`, {
+      method: "POST",
+      headers: buildHeaders(),
+    });
+    handleUnauthorized(response.status);
+    if (!response.ok) {
+      const payload = (await response.json().catch(() => null)) as { detail?: string } | null;
+      throw new Error(payload?.detail ?? `处理记忆候选失败：${response.status}`);
+    }
+  },
+  acceptMemoryCandidate: (candidateId: string) => api.resolveMemoryCandidate(candidateId, "accept"),
+  dismissMemoryCandidate: (candidateId: string) => api.resolveMemoryCandidate(candidateId, "dismiss"),
   listConversations: () => request<Conversation[]>("/api/conversations"),
   createConversation: (title = "新会话") =>
     request<Conversation>("/api/conversations", {
@@ -136,6 +152,7 @@ export const api = {
     knowledgeGroup: string | undefined,
     onStatus: (content: string, phase: string | undefined) => void,
     onChunk: (chunk: string) => void,
+    onMemoryCandidate: (candidate: MemoryCandidate) => void,
     onDone: (messageId: string) => void,
   ): Promise<void> {
     // 该 SSE 接口是 POST 请求，因此使用 fetch 而非仅支持 GET 的 EventSource。
@@ -164,9 +181,16 @@ export const api = {
         const type = event.match(/^event: (.+)$/m)?.[1];
         const data = event.match(/^data: (.+)$/m)?.[1];
         if (!type || !data) continue;
-        const payload = JSON.parse(data) as { content?: string; phase?: string; message_id?: string; message?: string };
+        const payload = JSON.parse(data) as {
+          content?: string;
+          phase?: string;
+          message_id?: string;
+          message?: string;
+          candidate?: MemoryCandidate;
+        };
         if (type === "status" && payload.content) onStatus(payload.content, payload.phase);
         if (type === "chunk" && payload.content) onChunk(payload.content);
+        if (type === "memory_candidate" && payload.candidate) onMemoryCandidate(payload.candidate);
         if (type === "done" && payload.message_id) onDone(payload.message_id);
         if (type === "error") throw new Error(payload.message ?? "生成失败");
       }
