@@ -206,6 +206,30 @@ class KnowledgeChunk(Base):
     embedding_model: Mapped[str | None] = mapped_column(String(100), nullable=True)
 
 
+class KnowledgeIndexJob(Base, TimestampMixin):
+    """持久化的知识库索引任务；Worker 重启后可继续领取未完成工作。"""
+
+    __tablename__ = "knowledge_index_jobs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    document_id: Mapped[str] = mapped_column(
+        ForeignKey("knowledge_documents.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="queued", index=True)
+    stage: Mapped[str] = mapped_column(String(30), nullable=False, default="queued")
+    processed_chunks: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    total_chunks: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    max_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
+    run_after: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False, index=True
+    )
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    embedding_model: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class Message(Base):
     """会话中的一条用户或 Agent 消息。"""
     __tablename__ = "messages"

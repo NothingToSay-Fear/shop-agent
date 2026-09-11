@@ -56,10 +56,10 @@ SQL 模板存储在表中以便维护指标口径，但执行前必须与后端�
 ```text
 上传文件 + 分组
   -> 校验格式与大小
-  -> 提取文本并保存原件
-  -> 切分 knowledge_chunks
-  -> 本地模型向量化
-  -> ready / pending_embedding
+  -> 保存原件、knowledge_documents(queued) 与 knowledge_index_jobs(queued)
+  -> API 立即返回，前端轮询任务进度
+  -> 独立 knowledge-worker 领取任务、解析并分批向量化
+  -> 原子标记 ready / failed；临时失败按退避策略重试
 
 综合分析 + 可选知识库分组
   -> 问题向量化（每个问题一次）
@@ -77,6 +77,8 @@ SQL 模板存储在表中以便维护指标口径，但执行前必须与后端�
 
 本地模型未就绪时，文件仍会保存为 `pending_embedding`，不会参与知识库检索。模型下载完成后执行 `python -m app.reindex_embeddings`，可同时重建指标定义和知识库片段向量。删除资料时，数据库以外键级联删除 `knowledge_chunks`（含向量），随后删除 `uploads/` 中的原文件。
 
+资料入库不在上传请求内执行。API 接收文件后，在同一数据库事务中创建 `knowledge_documents` 和 `knowledge_index_jobs`，随后返回 `202 Accepted`；`knowledge-worker` 使用 PostgreSQL 行锁（`FOR UPDATE SKIP LOCKED`）领取任务，支持多个 Worker 并行而不重复处理。任务依次记录 `queued`、`parsing`、`embedding`、`completed` 或 `failed` 状态及已处理片段数；Worker 重启时会将遗留 `running` 任务重新入队。向量按默认 32 个片段一批持久化，文档处于 `processing` 时不参与检索；删除文档后，Worker 在每批提交前检测其状态，避免继续写入已删除资料。临时错误最多重试 3 次并指数退避，解析错误等不可恢复错误直接标记失败。
+
 | 环境变量 | 是否必填 | 说明 |
 | --- | --- | --- |
 | `LOCAL_EMBEDDING_MODEL_PATH` | 使用本地语义检索时必填 | 容器中的模型目录，默认 `/models/bge-small-zh-v1.5` |
@@ -87,6 +89,9 @@ SQL 模板存储在表中以便维护指标口径，但执行前必须与后端�
 | `LOCAL_RERANKER_DEVICE` | 可选 | 精排推理设备，默认 `cpu` |
 | `KNOWLEDGE_RERANKER_MIN_SCORE` | 可选 | 知识库精排最低相关度，默认 `0.35`；仅在精排模型正常评分时生效 |
 | `RAG_QUERY_EXPANSION_MAX_QUERIES` | 可选 | LLM 检索改写数量，默认 `2`；设为 `0` 时禁用改写 |
+| `KNOWLEDGE_INDEX_BATCH_SIZE` | 可选 | Worker 每批向量化的片段数，默认 `32` |
+| `KNOWLEDGE_INDEX_POLL_SECONDS` | 可选 | Worker 空闲轮询任务间隔，默认 `1` 秒 |
+| `KNOWLEDGE_INDEX_MAX_ATTEMPTS` | 可选 | 索引任务最大尝试次数，默认 `3` |
 
 当前时间解析支持“最近 7 天”（默认）、“最近 14 天/近 14 天/两周”、“上周”，以及“2026 年 6 月 6 日至 6 月 18 日”这类完整年份的日期区间。新增更多时间范围、渠道或商品维度时，应扩展受控参数解析和模板注册表，不能直接把用户输入拼入 SQL。
 
@@ -321,7 +326,7 @@ API 容器启动时会先执行数据库迁移，再运行 `python -m app.seed`�
 
 如需重新生成测试业务数据，可在人工确认后执行 `docker compose exec api python -m app.seed --reset-business-data`。该命令会永久删除 `products` 和 `daily_metrics` 中的全部记录，再写入上述 2026 年模拟商品和指标；不会删除账号、会话、记忆、指标定义或知识库文件，不能用于保留真实业务数据的环境。知识库原始文件保存在 `uploads/` 挂载目录，重建 API 容器不会丢失；不要随意删除该目录。
 
-本地语义向量与精排模型不随镜像或 Git 仓库提交。首次使用依次执行 `docker compose build api model-download`、`docker compose run --rm model-download`、`docker compose up -d api` 和 `docker compose exec api python -m app.reindex_embeddings`。下载工具会将嵌入模型保存到 `models/bge-small-zh-v1.5`、精排模型保存到 `models/bge-reranker-base`，随后均以只读卷挂载给 API；下载完成后重建指标定义和知识库片段向量。需要暂时跳过精排模型时可执行 `docker compose run --rm model-download python -m app.download_embedding_model --skip-reranker`。API 运行期间不会下载模型或调用外部嵌入 API。
+本地语义向量与精排模型不随镜像或 Git 仓库提交。首次使用依次执行 `docker compose build api knowledge-worker model-download`、`docker compose run --rm model-download`、`docker compose up -d api knowledge-worker` 和 `docker compose exec api python -m app.reindex_embeddings`。下载工具会将嵌入模型保存到 `models/bge-small-zh-v1.5`、精排模型保存到 `models/bge-reranker-base`，随后均以只读卷挂载给 API 与 Worker；下载完成后重建指标定义和知识库片段向量。需要暂时跳过精排模型时可执行 `docker compose run --rm model-download python -m app.download_embedding_model --skip-reranker`。API 运行期间不会下载模型或调用外部嵌入 API。
 
 镜像为 CPU 推理预装 PyTorch CPU 轮子，不会安装 CUDA 运行库；如后续需要 GPU 推理，应单独提供 GPU 镜像与 `LOCAL_EMBEDDING_DEVICE` 配置，而不是在默认镜像中混入 CUDA 依赖。
 

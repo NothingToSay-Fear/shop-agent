@@ -61,10 +61,17 @@ function memoryTypeLabel(memoryType: MemoryCandidate["memory_type"]) {
   return memoryTypeOptions.find((item) => item.value === memoryType)?.label ?? memoryType;
 }
 
-function documentStatusTag(status: string) {
-  if (status === "ready") return <Tag color="success">索引已完成，可检索</Tag>;
-  if (status === "processing") return <Tag color="processing">正在建立索引</Tag>;
-  return <Tag color="warning">待向量化</Tag>;
+function documentStatusTag(document: KnowledgeDocument) {
+  if (document.status === "ready") return <Tag color="success">索引已完成，可检索</Tag>;
+  if (document.status === "failed") return <Tooltip title={document.index_error_message ?? document.error_message ?? "索引失败"}><Tag color="error">索引失败，可删除后重传</Tag></Tooltip>;
+  if (document.status === "queued") return <Tag color="processing">等待后台索引</Tag>;
+  if (document.status === "processing") {
+    const progress = document.total_chunks > 0
+      ? `向量化 ${document.processed_chunks}/${document.total_chunks}`
+      : "正在解析资料";
+    return <Tag color="processing">{progress}</Tag>;
+  }
+  return <Tag color="warning">待处理</Tag>;
 }
 
 export function App() {
@@ -117,6 +124,16 @@ export function App() {
       void loadMemoryCandidates(activeConversationId);
     }
   }, [activeConversationId]);
+
+  useEffect(() => {
+    // 仅在抽屉打开且存在进行中的任务时轮询，索引完成后自动停止。
+    const hasPendingIndex = knowledgeDocuments.some((document) =>
+      document.status === "queued" || document.status === "processing",
+    );
+    if (!knowledgeOpen || !hasPendingIndex) return undefined;
+    const timer = window.setInterval(() => void loadKnowledge(), 2000);
+    return () => window.clearInterval(timer);
+  }, [knowledgeOpen, knowledgeDocuments]);
 
   async function bootstrap() {
     try {
@@ -266,7 +283,7 @@ export function App() {
     setUploading(true);
     try {
       const document = await api.uploadKnowledgeDocument(uploadFile, uploadGroup.trim());
-      message.success(document.status === "ready" ? "文件已完成索引，可立即用于综合分析。" : "文件已上传，等待向量索引。" );
+      message.success("文件已上传，正在后台建立索引。");
       setUploadFile(undefined);
       await loadKnowledge();
     } catch (error) {
@@ -588,9 +605,9 @@ export function App() {
             支持 PDF、DOCX、Markdown、TXT，单个文件最大 20MB。
           </Typography.Text>
           <Button type="primary" icon={<UploadOutlined />} loading={uploading} onClick={() => void uploadKnowledgeDocument()}>
-            {uploading ? "正在上传并建立索引…" : "上传并建立索引"}
+            {uploading ? "正在上传文件…" : "上传并后台建立索引"}
           </Button>
-          {uploading && <Spin size="small" tip="正在解析文件、切分文本并生成向量，请勿关闭此页面。" />}
+          {uploading && <Spin size="small" tip="正在保存文件…" />}
         </section>
         <Typography.Title level={5}>已上传资料</Typography.Title>
         <List
@@ -607,6 +624,7 @@ export function App() {
                     size="small"
                     shape="circle"
                     icon={<EyeOutlined />}
+                    disabled={item.status !== "ready"}
                     onClick={() => void previewKnowledgeDocument(item.id)}
                   />
                 </Tooltip>,
@@ -650,10 +668,10 @@ export function App() {
                     <Tooltip title={item.group_name}>
                       <Tag className="knowledge-document-group">{item.group_name}</Tag>
                     </Tooltip>
-                    {documentStatusTag(item.status)}
+                    {documentStatusTag(item)}
                   </div>
                 }
-                description={`${item.file_type.toUpperCase()} · ${item.chunk_count} 个片段`}
+                description={`${item.file_type.toUpperCase()} · ${item.status === "processing" || item.status === "queued" ? "索引任务进行中" : `${item.chunk_count} 个片段`}`}
               />
             </List.Item>
           )}

@@ -84,6 +84,11 @@ export interface KnowledgeDocument {
   status: string;
   error_message: string | null;
   chunk_count: number;
+  index_status: string | null;
+  index_stage: string | null;
+  processed_chunks: number;
+  total_chunks: number;
+  index_error_message: string | null;
   created_at: string;
   updated_at: string;
 }

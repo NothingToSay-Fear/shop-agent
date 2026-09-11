@@ -22,6 +22,9 @@ class Settings(BaseSettings):
     rag_query_expansion_max_queries: int = 2
     knowledge_upload_dir: str = "/uploads"
     knowledge_max_upload_size_mb: int = 20
+    knowledge_index_batch_size: int = Field(default=32, ge=1, le=256)
+    knowledge_index_poll_seconds: float = Field(default=1.0, ge=0.1, le=30.0)
+    knowledge_index_max_attempts: int = Field(default=3, ge=1, le=10)
     web_search_provider: str = "tavily"
     web_search_api_key: str | None = None
     web_search_max_results: int = 5

@@ -32,6 +32,9 @@ services:
       RAG_QUERY_EXPANSION_MAX_QUERIES: ${RAG_QUERY_EXPANSION_MAX_QUERIES:-2}
       KNOWLEDGE_UPLOAD_DIR: ${KNOWLEDGE_UPLOAD_DIR:-/uploads}
       KNOWLEDGE_MAX_UPLOAD_SIZE_MB: ${KNOWLEDGE_MAX_UPLOAD_SIZE_MB:-20}
+      KNOWLEDGE_INDEX_BATCH_SIZE: ${KNOWLEDGE_INDEX_BATCH_SIZE:-32}
+      KNOWLEDGE_INDEX_POLL_SECONDS: ${KNOWLEDGE_INDEX_POLL_SECONDS:-1}
+      KNOWLEDGE_INDEX_MAX_ATTEMPTS: ${KNOWLEDGE_INDEX_MAX_ATTEMPTS:-3}
       WEB_SEARCH_PROVIDER: ${WEB_SEARCH_PROVIDER:-tavily}
       WEB_SEARCH_API_KEY: ${WEB_SEARCH_API_KEY:-}
       WEB_SEARCH_MAX_RESULTS: ${WEB_SEARCH_MAX_RESULTS:-5}
@@ -54,6 +57,25 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+
+  knowledge-worker:
+    build:
+      context: ./backend
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://shop_agent:change-me@db:5432/shop_agent}
+      LOCAL_EMBEDDING_MODEL_PATH: ${LOCAL_EMBEDDING_MODEL_PATH:-/models/bge-small-zh-v1.5}
+      LOCAL_EMBEDDING_MODEL_ID: ${LOCAL_EMBEDDING_MODEL_ID:-BAAI/bge-small-zh-v1.5}
+      LOCAL_EMBEDDING_DEVICE: ${LOCAL_EMBEDDING_DEVICE:-cpu}
+      KNOWLEDGE_INDEX_BATCH_SIZE: ${KNOWLEDGE_INDEX_BATCH_SIZE:-32}
+      KNOWLEDGE_INDEX_POLL_SECONDS: ${KNOWLEDGE_INDEX_POLL_SECONDS:-1}
+      KNOWLEDGE_INDEX_MAX_ATTEMPTS: ${KNOWLEDGE_INDEX_MAX_ATTEMPTS:-3}
+    depends_on:
+      api:
+        condition: service_healthy
+    volumes:
+      - ./models:/models:ro
+      - ./uploads:/uploads:ro
+    command: ["python", "-m", "app.knowledge_worker"]
 
   frontend:
     build:

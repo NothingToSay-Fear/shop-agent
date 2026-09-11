@@ -14,6 +14,11 @@ class KnowledgeDocumentRead(BaseModel):
     status: str
     error_message: str | None
     chunk_count: int
+    index_status: str | None = None
+    index_stage: str | None = None
+    processed_chunks: int = 0
+    total_chunks: int = 0
+    index_error_message: str | None = None
     created_at: datetime
     updated_at: datetime
 

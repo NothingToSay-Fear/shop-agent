@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import Settings, get_settings
 from app.models import KnowledgeChunk, KnowledgeDocument
 from app.services.hybrid_retrieval import FusedCandidate, hybrid_retrieve
+from app.services.local_embeddings import embed_texts
 from app.services.local_reranker import rerank_texts
 from app.services.metric_rag import cosine_similarity
 from app.services.query_expansion import embed_expanded_queries, expand_queries
