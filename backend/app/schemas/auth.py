@@ -47,6 +47,7 @@ class UserRead(BaseModel):
     id: str
     username: str
     display_name: str
+    is_admin: bool
     created_at: datetime
 
     model_config = {"from_attributes": True}

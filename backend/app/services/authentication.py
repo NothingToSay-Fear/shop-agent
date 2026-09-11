@@ -15,6 +15,8 @@ from app.config import get_settings
 from app.database import get_session
 from app.models import AuthToken, User
 
+LEGACY_MIGRATION_USERNAME = "legacy_migration_owner"
+
 _PASSWORD_ALGORITHM = "scrypt"
 _SCRYPT_N = 2**14
 _SCRYPT_R = 8
@@ -96,3 +98,4 @@ async def get_current_user(
     if user is None:
         raise unauthorized
     return user
+

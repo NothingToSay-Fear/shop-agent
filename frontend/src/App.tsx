@@ -16,15 +16,18 @@ import {
 import {
   Button,
   Card,
+  Checkbox,
   Drawer,
   Input,
   Layout,
   List,
   Modal,
   Popconfirm,
+  Radio,
   Select,
   Space,
   Spin,
+  Tabs,
   Tag,
   Tooltip,
   Typography,
@@ -88,6 +91,8 @@ export function App() {
   const [knowledgeDocuments, setKnowledgeDocuments] = useState<KnowledgeDocument[]>([]);
   const [knowledgeGroups, setKnowledgeGroups] = useState<KnowledgeGroup[]>([]);
   const [uploadGroup, setUploadGroup] = useState("活动规则");
+  const [uploadSpace, setUploadSpace] = useState<"private" | "team">("private");
+  const [knowledgeTab, setKnowledgeTab] = useState<"team" | "private">("team");
   const [uploadFile, setUploadFile] = useState<File>();
   const [uploading, setUploading] = useState(false);
   const [deletingDocumentId, setDeletingDocumentId] = useState<string>();
@@ -282,7 +287,11 @@ export function App() {
     }
     setUploading(true);
     try {
-      const document = await api.uploadKnowledgeDocument(uploadFile, uploadGroup.trim());
+      const document = await api.uploadKnowledgeDocument(
+        uploadFile,
+        uploadGroup.trim(),
+        currentUser?.is_admin ? uploadSpace : "private",
+      );
       message.success("文件已上传，正在后台建立索引。");
       setUploadFile(undefined);
       await loadKnowledge();
@@ -315,6 +324,30 @@ export function App() {
     }
   }
 
+  async function updateKnowledgeDocumentRetrieval(document: KnowledgeDocument, enabled: boolean) {
+    try {
+      const updated = await api.updateKnowledgeDocumentRetrieval(document.id, enabled);
+      setKnowledgeDocuments((items) => items.map((item) => (item.id === updated.id ? updated : item)));
+      message.success(enabled ? "该资料已加入本人的问答检索" : "该资料已从本人的问答检索中移除");
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : "更新资料检索设置失败");
+    }
+  }
+
+  async function downloadKnowledgeDocument(document: KnowledgeDocument) {
+    try {
+      const blob = await api.downloadKnowledgeDocument(document.id);
+      const url = URL.createObjectURL(blob);
+      const anchor = window.document.createElement("a");
+      anchor.href = url;
+      anchor.download = document.original_filename;
+      anchor.click();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : "下载文件失败");
+    }
+  }
+
   async function openMessageAudit(messageId: string) {
     if (!activeConversationId) return;
     setAuditOpen(true);
@@ -331,7 +364,8 @@ export function App() {
     if (!activeConversationId) return;
     try {
       await api.resetConversationContext(activeConversationId);
-      setKnowledgeGroup(undefined);
+    setKnowledgeGroup(undefined);
+    setUploadSpace("private");
       message.success("本会话的活动、时间、指标和资料分组条件已重置。");
     } catch (error) {
       message.error(error instanceof Error ? error.message : "重置会话条件失败。");
@@ -399,6 +433,90 @@ export function App() {
 
   async function refreshConversations() {
     setConversations(await api.listConversations());
+  }
+
+  function renderKnowledgeDocuments(documents: KnowledgeDocument[], emptyText: string) {
+    return (
+      <List
+        dataSource={documents}
+        locale={{ emptyText }}
+        renderItem={(item) => {
+          const canDelete = item.space === "private" || currentUser?.is_admin === true;
+          return (
+            <List.Item
+              className="knowledge-document-item"
+              actions={[
+                <Tooltip key="retrieval" title="决定该资料是否参与你自己的后续问答检索">
+                  <Checkbox
+                    checked={item.retrieval_enabled}
+                    onChange={(event) => void updateKnowledgeDocumentRetrieval(item, event.target.checked)}
+                  >
+                    加入问答
+                  </Checkbox>
+                </Tooltip>,
+                <Tooltip key="preview" title="预览">
+                  <Button
+                    aria-label="预览"
+                    type="text"
+                    size="small"
+                    shape="circle"
+                    icon={<EyeOutlined />}
+                    disabled={item.status !== "ready"}
+                    onClick={() => void previewKnowledgeDocument(item.id)}
+                  />
+                </Tooltip>,
+                <Tooltip key="download" title="下载原文件">
+                  <Button
+                    aria-label="下载原文件"
+                    type="text"
+                    size="small"
+                    shape="circle"
+                    icon={<DownloadOutlined />}
+                    onClick={() => void downloadKnowledgeDocument(item)}
+                  />
+                </Tooltip>,
+                ...(canDelete ? [
+                  <Popconfirm
+                    key="delete"
+                    title="删除此知识库文件？"
+                    description="将同时删除原始文件、索引任务、片段和向量，无法恢复。"
+                    okText="删除"
+                    cancelText="取消"
+                    onConfirm={() => void deleteKnowledgeDocument(item)}
+                  >
+                    <Button
+                      aria-label="删除"
+                      title="删除"
+                      danger
+                      type="text"
+                      size="small"
+                      shape="circle"
+                      icon={<DeleteOutlined />}
+                      loading={deletingDocumentId === item.id}
+                    />
+                  </Popconfirm>,
+                ] : []),
+              ]}
+            >
+              <List.Item.Meta
+                title={
+                  <div className="knowledge-document-title">
+                    <Typography.Text className="knowledge-document-name" ellipsis={{ tooltip: item.title }}>
+                      {item.title}
+                    </Typography.Text>
+                    <Tooltip title={item.group_name}>
+                      <Tag className="knowledge-document-group">{item.group_name}</Tag>
+                    </Tooltip>
+                    {documentStatusTag(item)}
+                  </div>
+                }
+                description={`${item.file_type.toUpperCase()} · ${item.status === "processing" || item.status === "queued" ? "索引任务进行中" : `${item.chunk_count} 个片段`}`}
+              />
+            </List.Item>
+          );
+        }}
+      />
+    );
   }
 
   if (loading) {
@@ -588,6 +706,17 @@ export function App() {
       <Drawer title="知识库管理" width={560} open={knowledgeOpen} onClose={() => setKnowledgeOpen(false)}>
         <section className="knowledge-upload">
           <Typography.Text strong>上传运营资料</Typography.Text>
+          {currentUser.is_admin ? (
+            <Radio.Group
+              value={uploadSpace}
+              onChange={(event) => setUploadSpace(event.target.value as "private" | "team")}
+            >
+              <Radio value="private">上传至我的资料</Radio>
+              <Radio value="team">上传至团队资料</Radio>
+            </Radio.Group>
+          ) : (
+            <Typography.Text type="secondary">上传的资料仅自己可见，默认加入你的问答检索。</Typography.Text>
+          )}
           <Input
             value={uploadGroup}
             maxLength={100}
@@ -609,72 +738,27 @@ export function App() {
           </Button>
           {uploading && <Spin size="small" tip="正在保存文件…" />}
         </section>
-        <Typography.Title level={5}>已上传资料</Typography.Title>
-        <List
-          dataSource={knowledgeDocuments}
-          locale={{ emptyText: "暂无资料" }}
-          renderItem={(item) => (
-            <List.Item
-              className="knowledge-document-item"
-              actions={[
-                <Tooltip key="preview" title="预览">
-                  <Button
-                    aria-label="预览"
-                    type="text"
-                    size="small"
-                    shape="circle"
-                    icon={<EyeOutlined />}
-                    disabled={item.status !== "ready"}
-                    onClick={() => void previewKnowledgeDocument(item.id)}
-                  />
-                </Tooltip>,
-                <Tooltip key="download" title="下载原文件">
-                  <Button
-                    aria-label="下载原文件"
-                    type="text"
-                    size="small"
-                    shape="circle"
-                    icon={<DownloadOutlined />}
-                    href={api.getKnowledgeDownloadUrl(item.id)}
-                  />
-                </Tooltip>,
-                <Popconfirm
-                  key="delete"
-                  title="删除此知识库文件？"
-                  description="将同时删除原始文件、索引片段和向量，无法恢复。"
-                  okText="删除"
-                  cancelText="取消"
-                  onConfirm={() => void deleteKnowledgeDocument(item)}
-                >
-                  <Button
-                    aria-label="删除"
-                    title="删除"
-                    danger
-                    type="text"
-                    size="small"
-                    shape="circle"
-                    icon={<DeleteOutlined />}
-                    loading={deletingDocumentId === item.id}
-                  />
-                </Popconfirm>,
-              ]}
-            >
-              <List.Item.Meta
-                title={
-                  <div className="knowledge-document-title">
-                    <Typography.Text className="knowledge-document-name" ellipsis={{ tooltip: item.title }}>
-                      {item.title}
-                    </Typography.Text>
-                    <Tooltip title={item.group_name}>
-                      <Tag className="knowledge-document-group">{item.group_name}</Tag>
-                    </Tooltip>
-                    {documentStatusTag(item)}
-                  </div>
-                }
-                description={`${item.file_type.toUpperCase()} · ${item.status === "processing" || item.status === "queued" ? "索引任务进行中" : `${item.chunk_count} 个片段`}`}
-              />
-            </List.Item>
-          )}
+        <Tabs
+          activeKey={knowledgeTab}
+          onChange={(key) => setKnowledgeTab(key as "team" | "private")}
+          items={[
+            {
+              key: "team",
+              label: `团队资料（${knowledgeDocuments.filter((item) => item.space === "team").length}）`,
+              children: renderKnowledgeDocuments(
+                knowledgeDocuments.filter((item) => item.space === "team"),
+                "暂无团队资料",
+              ),
+            },
+            {
+              key: "private",
+              label: `我的资料（${knowledgeDocuments.filter((item) => item.space === "private").length}）`,
+              children: renderKnowledgeDocuments(
+                knowledgeDocuments.filter((item) => item.space === "private"),
+                "暂无私有资料",
+              ),
+            },
+          ]}
         />
       </Drawer>
       <Drawer
@@ -746,7 +830,11 @@ export function App() {
         title={previewDocument?.title}
         open={Boolean(previewDocument)}
         onCancel={() => setPreviewDocument(undefined)}
-        footer={previewDocument ? <Button href={api.getKnowledgeDownloadUrl(previewDocument.id)} icon={<DownloadOutlined />}>下载原文件</Button> : null}
+        footer={previewDocument ? (
+          <Button icon={<DownloadOutlined />} onClick={() => void downloadKnowledgeDocument(previewDocument)}>
+            下载原文件
+          </Button>
+        ) : null}
         width={760}
       >
         <Typography.Paragraph className="knowledge-preview">

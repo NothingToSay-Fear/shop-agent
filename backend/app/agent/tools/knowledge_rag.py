@@ -9,7 +9,9 @@ from app.database import SessionLocal
 from app.services.knowledge_rag import query_knowledge_for_question
 
 
-def build_knowledge_rag_tool(tracker: AgentToolTracker, settings: Settings) -> BaseTool:
+def build_knowledge_rag_tool(
+    tracker: AgentToolTracker, settings: Settings, user_id: str | None = None
+) -> BaseTool:
     """创建支持按资料分组检索的知识库工具。"""
 
     @tool("query_knowledge_rag")
@@ -32,7 +34,7 @@ def build_knowledge_rag_tool(tracker: AgentToolTracker, settings: Settings) -> B
         try:
             async with SessionLocal() as session:
                 context = await query_knowledge_for_question(
-                    session, question, group_name, settings=settings
+                    session, question, user_id, group_name, settings=settings
                 )
             tracker.knowledge_context = context
             tracker.knowledge_miss = context is None

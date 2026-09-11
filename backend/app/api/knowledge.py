@@ -7,13 +7,19 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.database import get_session
-from app.models import KnowledgeDocument, KnowledgeIndexJob
-from app.schemas.knowledge import KnowledgeDocumentContent, KnowledgeDocumentRead, KnowledgeGroupRead
+from app.models import KnowledgeDocument, KnowledgeIndexJob, User, UserKnowledgeDocumentSetting
+from app.schemas.knowledge import (
+    KnowledgeDocumentContent,
+    KnowledgeDocumentRead,
+    KnowledgeDocumentRetrievalUpdate,
+    KnowledgeGroupRead,
+)
+from app.services.authentication import get_current_user
 from app.services.document_parser import SUPPORTED_FILE_TYPES
 
 router = APIRouter(prefix="/api/knowledge", tags=["knowledge"])
@@ -21,10 +27,13 @@ logger = logging.getLogger(__name__)
 
 
 @router.get("/groups", response_model=list[KnowledgeGroupRead])
-async def list_groups(session: AsyncSession = Depends(get_session)) -> list[KnowledgeGroupRead]:
+async def list_groups(
+    session: AsyncSession = Depends(get_session), current_user: User = Depends(get_current_user)
+) -> list[KnowledgeGroupRead]:
     """返回已存在分组，供上传和检索范围选择。"""
     result = await session.execute(
         select(KnowledgeDocument.group_name, func.count(KnowledgeDocument.id))
+        .where(_visible_document_condition(current_user))
         .group_by(KnowledgeDocument.group_name)
         .order_by(KnowledgeDocument.group_name)
     )
@@ -33,28 +42,47 @@ async def list_groups(session: AsyncSession = Depends(get_session)) -> list[Know
 
 @router.get("/documents", response_model=list[KnowledgeDocumentRead])
 async def list_documents(
-    group_name: str | None = None, session: AsyncSession = Depends(get_session)
+    group_name: str | None = None,
+    session: AsyncSession = Depends(get_session),
+    current_user: User = Depends(get_current_user),
 ) -> list[KnowledgeDocumentRead]:
     """按可选分组列出资料，默认返回全部。"""
-    statement = select(KnowledgeDocument).order_by(KnowledgeDocument.created_at.desc())
+    statement = (
+        select(KnowledgeDocument)
+        .where(_visible_document_condition(current_user))
+        .order_by(KnowledgeDocument.created_at.desc())
+    )
     if group_name:
         statement = statement.where(KnowledgeDocument.group_name == group_name)
     documents = list((await session.scalars(statement)).all())
     jobs = await _latest_jobs(session, [document.id for document in documents])
-    return [_serialize_document(document, jobs.get(document.id)) for document in documents]
+    enabled_ids = await _retrieval_enabled_document_ids(
+        session, current_user.id, [document.id for document in documents]
+    )
+    return [
+        _serialize_document(document, jobs.get(document.id), document.id in enabled_ids)
+        for document in documents
+    ]
 
 
 @router.post("/documents", response_model=KnowledgeDocumentRead, status_code=status.HTTP_202_ACCEPTED)
 async def upload_document(
     file: UploadFile = File(...),
     group_name: str = Form(...),
+    space: str = Form("private"),
     session: AsyncSession = Depends(get_session),
+    current_user: User = Depends(get_current_user),
 ) -> KnowledgeDocumentRead:
     """快速保存原文件并创建持久化任务；耗时索引由独立 Worker 完成。"""
     settings = get_settings()
     clean_group = group_name.strip()
+    clean_space = space.strip().lower()
     if not clean_group or len(clean_group) > 100:
         raise HTTPException(status_code=422, detail="分组名称长度应为 1 至 100 个字符")
+    if clean_space not in {"private", "team"}:
+        raise HTTPException(status_code=422, detail="资料空间只能是 private 或 team")
+    if clean_space == "team" and not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="仅管理员可以上传团队资料")
     original_filename = file.filename or "untitled"
     suffix = Path(original_filename).suffix.lower()
     if suffix not in SUPPORTED_FILE_TYPES:
@@ -76,6 +104,8 @@ async def upload_document(
 
     document = KnowledgeDocument(
         id=document_id,
+        owner_user_id=current_user.id,
+        space=clean_space,
         title=Path(original_filename).stem[:200] or "未命名资料",
         original_filename=original_filename[:255],
         file_type=suffix.lstrip("."),
@@ -94,6 +124,13 @@ async def upload_document(
     )
     session.add(document)
     session.add(job)
+    # 私有资料属于上传者，默认加入其问答检索；团队资料必须由每位用户自行勾选。
+    if clean_space == "private":
+        session.add(
+            UserKnowledgeDocumentSetting(
+                user_id=current_user.id, document_id=document_id, retrieval_enabled=True
+            )
+        )
     try:
         # 文档与任务在同一事务提交，避免出现“已保存却永远不会被索引”的孤立文件记录。
         await session.flush()
@@ -104,23 +141,32 @@ async def upload_document(
         # 原文件不能在数据库写入失败后长期成为不可见的孤立文件。
         await asyncio.to_thread(storage_path.unlink, missing_ok=True)
         raise HTTPException(status_code=500, detail="知识库文件入库失败，请稍后重试") from error
-    return _serialize_document(document, job)
+    return _serialize_document(document, job, retrieval_enabled=clean_space == "private")
 
 
 @router.get("/documents/{document_id}", response_model=KnowledgeDocumentContent)
 async def get_document(
-    document_id: str, session: AsyncSession = Depends(get_session)
+    document_id: str,
+    session: AsyncSession = Depends(get_session),
+    current_user: User = Depends(get_current_user),
 ) -> KnowledgeDocumentContent:
     """返回提取后的文本，用于浏览器内的统一预览。"""
-    document = await _get_document(document_id, session)
+    document = await _get_visible_document(document_id, current_user, session)
     job = (await _latest_jobs(session, [document.id])).get(document.id)
-    return KnowledgeDocumentContent(**_serialize_document(document, job).model_dump(), content=document.content)
+    enabled_ids = await _retrieval_enabled_document_ids(session, current_user.id, [document.id])
+    return KnowledgeDocumentContent(
+        **_serialize_document(document, job, document.id in enabled_ids).model_dump(), content=document.content
+    )
 
 
 @router.get("/documents/{document_id}/download")
-async def download_document(document_id: str, session: AsyncSession = Depends(get_session)) -> FileResponse:
+async def download_document(
+    document_id: str,
+    session: AsyncSession = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+) -> FileResponse:
     """下载未经改写的原始上传文件。"""
-    document = await _get_document(document_id, session)
+    document = await _get_visible_document(document_id, current_user, session)
     path = Path(document.file_path)
     if not path.is_file():
         raise HTTPException(status_code=404, detail="原始文件不存在")
@@ -128,9 +174,15 @@ async def download_document(document_id: str, session: AsyncSession = Depends(ge
 
 
 @router.delete("/documents/{document_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_document(document_id: str, session: AsyncSession = Depends(get_session)) -> None:
+async def delete_document(
+    document_id: str,
+    session: AsyncSession = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+) -> None:
     """删除资料、其级联片段向量和原始文件，避免过期资料影响检索。"""
-    document = await _get_document(document_id, session)
+    document = await _get_visible_document(document_id, current_user, session)
+    if document.space == "team" and not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="仅管理员可以删除团队资料")
     path = Path(document.file_path)
     await session.delete(document)
     await session.commit()
@@ -141,11 +193,62 @@ async def delete_document(document_id: str, session: AsyncSession = Depends(get_
         logger.warning("知识库原始文件删除失败：%s", path, exc_info=error)
 
 
-async def _get_document(document_id: str, session: AsyncSession) -> KnowledgeDocument:
-    document = await session.get(KnowledgeDocument, document_id)
+@router.put("/documents/{document_id}/retrieval", response_model=KnowledgeDocumentRead)
+async def update_document_retrieval(
+    document_id: str,
+    payload: KnowledgeDocumentRetrievalUpdate,
+    session: AsyncSession = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+) -> KnowledgeDocumentRead:
+    """由当前用户独立控制一份可见资料是否参与自己的知识库问答。"""
+    document = await _get_visible_document(document_id, current_user, session)
+    setting = await session.get(UserKnowledgeDocumentSetting, (current_user.id, document.id))
+    if setting is None:
+        setting = UserKnowledgeDocumentSetting(
+            user_id=current_user.id,
+            document_id=document.id,
+            retrieval_enabled=payload.retrieval_enabled,
+        )
+        session.add(setting)
+    else:
+        setting.retrieval_enabled = payload.retrieval_enabled
+    await session.commit()
+    job = (await _latest_jobs(session, [document.id])).get(document.id)
+    return _serialize_document(document, job, payload.retrieval_enabled)
+
+
+def _visible_document_condition(user: User):
+    """团队资料对所有登录用户可见；私有资料只对上传者可见。"""
+    return or_(KnowledgeDocument.space == "team", KnowledgeDocument.owner_user_id == user.id)
+
+
+async def _get_visible_document(
+    document_id: str, current_user: User, session: AsyncSession
+) -> KnowledgeDocument:
+    document = await session.scalar(
+        select(KnowledgeDocument).where(
+            KnowledgeDocument.id == document_id, _visible_document_condition(current_user)
+        )
+    )
     if document is None:
         raise HTTPException(status_code=404, detail="知识库文件不存在")
     return document
+
+
+async def _retrieval_enabled_document_ids(
+    session: AsyncSession, user_id: str, document_ids: list[str]
+) -> set[str]:
+    """只读取当前用户自己的勾选记录，避免资料选择状态在用户之间串扰。"""
+    if not document_ids:
+        return set()
+    result = await session.scalars(
+        select(UserKnowledgeDocumentSetting.document_id).where(
+            UserKnowledgeDocumentSetting.user_id == user_id,
+            UserKnowledgeDocumentSetting.document_id.in_(document_ids),
+            UserKnowledgeDocumentSetting.retrieval_enabled.is_(True),
+        )
+    )
+    return set(result)
 
 
 async def _latest_jobs(
@@ -170,7 +273,7 @@ async def _latest_jobs(
 
 
 def _serialize_document(
-    document: KnowledgeDocument, job: KnowledgeIndexJob | None
+    document: KnowledgeDocument, job: KnowledgeIndexJob | None, retrieval_enabled: bool = False
 ) -> KnowledgeDocumentRead:
     """将任务进度与资料元数据组合成前端可轮询的单一响应。"""
     values = KnowledgeDocumentRead.model_validate(document).model_dump()
@@ -180,5 +283,6 @@ def _serialize_document(
         processed_chunks=job.processed_chunks if job else 0,
         total_chunks=job.total_chunks if job else 0,
         index_error_message=job.error_message if job else None,
+        retrieval_enabled=retrieval_enabled,
     )
     return KnowledgeDocumentRead(**values)

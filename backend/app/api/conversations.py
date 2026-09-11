@@ -154,6 +154,7 @@ async def create_message(
                 retrieval_mode=payload.mode,
                 conversation_context=context_result.snapshot,
                 user_memory_context=memory_context,
+                user_id=current_user.id,
             ):
                 if event.event_type == "status":
                     yield _event("status", {"content": event.content, "phase": event.phase or ""})

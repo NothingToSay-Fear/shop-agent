@@ -2,11 +2,11 @@
 
 from dataclasses import dataclass
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings, get_settings
-from app.models import KnowledgeChunk, KnowledgeDocument
+from app.models import KnowledgeChunk, KnowledgeDocument, UserKnowledgeDocumentSetting
 from app.services.hybrid_retrieval import FusedCandidate, hybrid_retrieve
 from app.services.local_embeddings import embed_texts
 from app.services.local_reranker import rerank_texts
@@ -29,16 +29,31 @@ class KnowledgeQueryContext:
 async def query_knowledge_for_question(
     session: AsyncSession,
     question: str,
+    user_id: str | None,
     group_name: str | None = None,
     settings: Settings | None = None,
     query_embedding: list[float] | None = None,
 ) -> KnowledgeQueryContext | None:
     """从已就绪资料中进行多 Query 混合召回，并只返回最可靠的少量片段。"""
+    # 未携带已认证用户时不检索资料，避免兼容调用意外绕过用户选择范围。
+    if user_id is None:
+        return None
     active_settings = settings or get_settings()
     statement = (
         select(KnowledgeChunk, KnowledgeDocument)
         .join(KnowledgeDocument, KnowledgeChunk.document_id == KnowledgeDocument.id)
-        .where(KnowledgeDocument.status == "ready", KnowledgeChunk.embedding.is_not(None))
+        .join(
+            UserKnowledgeDocumentSetting,
+            UserKnowledgeDocumentSetting.document_id == KnowledgeDocument.id,
+        )
+        .where(
+            KnowledgeDocument.status == "ready",
+            KnowledgeChunk.embedding.is_not(None),
+            UserKnowledgeDocumentSetting.user_id == user_id,
+            UserKnowledgeDocumentSetting.retrieval_enabled.is_(True),
+            # 即便存在异常的选择记录，也不能越过私有资料的归属边界。
+            or_(KnowledgeDocument.space == "team", KnowledgeDocument.owner_user_id == user_id),
+        )
     )
     if group_name:
         statement = statement.where(KnowledgeDocument.group_name == group_name)

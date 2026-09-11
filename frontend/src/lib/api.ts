@@ -118,11 +118,14 @@ export const api = {
     ),
   getKnowledgeDocument: (documentId: string) =>
     request<KnowledgeDocumentContent>(`/api/knowledge/documents/${documentId}`),
-  async uploadKnowledgeDocument(file: File, groupName: string): Promise<KnowledgeDocument> {
+  async uploadKnowledgeDocument(
+    file: File, groupName: string, space: "private" | "team" = "private",
+  ): Promise<KnowledgeDocument> {
     // 文件上传不能使用全局 JSON 请求头，否则浏览器无法携带 multipart 边界。
     const body = new FormData();
     body.append("file", file);
     body.append("group_name", groupName);
+    body.append("space", space);
     const response = await fetch(`${API_URL}/api/knowledge/documents`, {
       method: "POST",
       headers: buildHeaders(),
@@ -144,7 +147,25 @@ export const api = {
       throw new Error(payload?.detail ?? `删除失败：${response.status}`);
     }
   },
-  getKnowledgeDownloadUrl: (documentId: string) => `${API_URL}/api/knowledge/documents/${documentId}/download`,
+  async updateKnowledgeDocumentRetrieval(
+    documentId: string, retrievalEnabled: boolean,
+  ): Promise<KnowledgeDocument> {
+    return request<KnowledgeDocument>(`/api/knowledge/documents/${documentId}/retrieval`, {
+      method: "PUT",
+      body: JSON.stringify({ retrieval_enabled: retrievalEnabled }),
+    });
+  },
+  async downloadKnowledgeDocument(documentId: string): Promise<Blob> {
+    const response = await fetch(`${API_URL}/api/knowledge/documents/${documentId}/download`, {
+      headers: buildHeaders(),
+    });
+    handleUnauthorized(response.status);
+    if (!response.ok) {
+      const payload = (await response.json().catch(() => null)) as { detail?: string } | null;
+      throw new Error(payload?.detail ?? `下载失败：${response.status}`);
+    }
+    return response.blob();
+  },
   async streamMessage(
     conversationId: string,
     content: string,

@@ -46,10 +46,11 @@ class AgentWorkflow:
         on_status: StatusCallback | None = None,
         conversation_context: ConversationContextSnapshot | None = None,
         user_memory_context: UserMemoryContext | None = None,
+        user_id: str | None = None,
     ) -> WorkflowResult:
         """先完成并校验执行计划，再允许模型基于受控结果组织回答。"""
         tracker = AgentToolTracker()
-        tools = build_agent_tools(tracker, self.settings)
+        tools = build_agent_tools(tracker, self.settings, user_id)
         active_context = conversation_context or ConversationContextSnapshot()
         active_memory_context = user_memory_context or UserMemoryContext()
         retrieval_question = build_retrieval_question(user_input, active_context)

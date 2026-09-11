@@ -8,6 +8,7 @@ from app.database import get_session
 from app.models import AuthToken, User
 from app.schemas.auth import AuthSessionRead, LoginRequest, RegisterRequest, UserRead
 from app.services.authentication import (
+    LEGACY_MIGRATION_USERNAME,
     create_access_token,
     get_current_user,
     hash_password,
@@ -26,10 +27,15 @@ async def register(payload: RegisterRequest, session: AsyncSession = Depends(get
     exists = await session.scalar(select(User.id).where(User.username == payload.username))
     if exists is not None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="该账号已被注册")
+    # 首个真实账号承担本地部署的初始化管理员角色；历史迁移占位账号不计入其中。
+    existing_real_user = await session.scalar(
+        select(User.id).where(User.username != LEGACY_MIGRATION_USERNAME).limit(1)
+    )
     user = User(
         username=payload.username,
         display_name=payload.display_name,
         password_hash=hash_password(payload.password),
+        is_admin=existing_real_user is None,
     )
     session.add(user)
     await session.flush()

@@ -30,6 +30,7 @@ class User(Base, TimestampMixin):
     username: Mapped[str] = mapped_column(String(50), unique=True, nullable=False, index=True)
     display_name: Mapped[str] = mapped_column(String(100), nullable=False)
     password_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    is_admin: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
 
 class AuthToken(Base):
@@ -178,6 +179,10 @@ class KnowledgeDocument(Base, TimestampMixin):
     __tablename__ = "knowledge_documents"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    owner_user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    space: Mapped[str] = mapped_column(String(20), nullable=False, default="private", index=True)
     title: Mapped[str] = mapped_column(String(200), nullable=False)
     original_filename: Mapped[str] = mapped_column(String(255), nullable=False)
     file_type: Mapped[str] = mapped_column(String(20), nullable=False)
@@ -187,6 +192,20 @@ class KnowledgeDocument(Base, TimestampMixin):
     status: Mapped[str] = mapped_column(String(30), nullable=False, default="processing")
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     chunk_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
+class UserKnowledgeDocumentSetting(Base, TimestampMixin):
+    """用户对可见资料的检索开关；不改变资料本身的可见范围。"""
+
+    __tablename__ = "user_knowledge_document_settings"
+
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    document_id: Mapped[str] = mapped_column(
+        ForeignKey("knowledge_documents.id", ondelete="CASCADE"), primary_key=True
+    )
+    retrieval_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
 
 class KnowledgeChunk(Base):

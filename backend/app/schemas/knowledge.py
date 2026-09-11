@@ -7,6 +7,7 @@ class KnowledgeDocumentRead(BaseModel):
     """知识库文件的列表与详情响应。"""
 
     id: str
+    space: str
     title: str
     original_filename: str
     file_type: str
@@ -19,6 +20,7 @@ class KnowledgeDocumentRead(BaseModel):
     processed_chunks: int = 0
     total_chunks: int = 0
     index_error_message: str | None = None
+    retrieval_enabled: bool = False
     created_at: datetime
     updated_at: datetime
 
@@ -36,3 +38,9 @@ class KnowledgeGroupRead(BaseModel):
 
     name: str
     document_count: int
+
+
+class KnowledgeDocumentRetrievalUpdate(BaseModel):
+    """用户更新一份可见资料是否参与本人问答检索的请求。"""
+
+    retrieval_enabled: bool

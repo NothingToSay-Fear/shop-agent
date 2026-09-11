@@ -10,6 +10,7 @@ export interface AuthUser {
   id: string;
   username: string;
   display_name: string;
+  is_admin: boolean;
   created_at: string;
 }
 
@@ -77,6 +78,7 @@ export interface AgentRunAudit {
 
 export interface KnowledgeDocument {
   id: string;
+  space: "private" | "team";
   title: string;
   original_filename: string;
   file_type: string;
@@ -89,6 +91,7 @@ export interface KnowledgeDocument {
   processed_chunks: number;
   total_chunks: number;
   index_error_message: string | null;
+  retrieval_enabled: boolean;
   created_at: string;
   updated_at: string;
 }

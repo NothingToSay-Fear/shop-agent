@@ -40,6 +40,7 @@ class OperationAgent:
         retrieval_mode: RetrievalMode = "hybrid",
         conversation_context: ConversationContextSnapshot | None = None,
         user_memory_context: UserMemoryContext | None = None,
+        user_id: str | None = None,
     ) -> AsyncIterator[str]:
         """保留旧文本分片接口，供既有调用方和测试继续使用。"""
         async for event in self.stream_events(
@@ -49,6 +50,7 @@ class OperationAgent:
             retrieval_mode,
             conversation_context,
             user_memory_context,
+            user_id,
         ):
             if event.event_type == "chunk":
                 yield event.content
@@ -61,6 +63,7 @@ class OperationAgent:
         retrieval_mode: RetrievalMode = "hybrid",
         conversation_context: ConversationContextSnapshot | None = None,
         user_memory_context: UserMemoryContext | None = None,
+        user_id: str | None = None,
     ) -> AsyncIterator[AgentStreamEvent]:
         """并发接收工作流阶段事件，完成后再流式输出回答文本。"""
         queue: asyncio.Queue[AgentStreamEvent | Exception | object] = asyncio.Queue()
@@ -82,6 +85,7 @@ class OperationAgent:
                         publish_status,
                         conversation_context,
                         user_memory_context,
+                        user_id,
                     )
                 await queue.put(result)
             except Exception as error:

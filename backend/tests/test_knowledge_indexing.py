@@ -11,6 +11,7 @@ def test_document_response_includes_latest_index_job_progress() -> None:
     timestamp = datetime.now(UTC)
     document = SimpleNamespace(
         id="document-1",
+        space="private",
         title="618 规则",
         original_filename="618.md",
         file_type="md",
@@ -29,10 +30,11 @@ def test_document_response_includes_latest_index_job_progress() -> None:
         error_message=None,
     )
 
-    result = _serialize_document(document, job)
+    result = _serialize_document(document, job, retrieval_enabled=True)
 
     assert result.status == "processing"
     assert result.index_status == "running"
     assert result.index_stage == "embedding"
     assert result.processed_chunks == 32
     assert result.total_chunks == 80
+    assert result.retrieval_enabled is True
