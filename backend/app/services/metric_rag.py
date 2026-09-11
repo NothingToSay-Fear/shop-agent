@@ -14,6 +14,8 @@ from app.models import DailyMetric, MetricDefinition
 from app.services.local_embeddings import embed_texts
 from app.services.activity_periods import ACTIVITY_PERIODS
 from app.services.date_ranges import parse_explicit_date_range, parse_explicit_date_ranges
+from app.services.hybrid_retrieval import hybrid_retrieve
+from app.services.query_expansion import embed_expanded_queries, expand_queries
 
 MAX_QUERY_UNITS = 4
 
@@ -183,24 +185,42 @@ def cosine_similarity(left: list[float], right: list[float]) -> float:
     return sum(a * b for a, b in zip(left, right, strict=True))
 
 
-def retrieve_metrics(question: str, documents: list[MetricDocument], query_embedding: list[float]) -> list[RetrievedMetric]:
-    """结合向量相似度和指标别名精确命中，返回最相关的一个或两个指标。"""
-    normalized_question = question.lower()
-    candidates: list[RetrievedMetric] = []
-    for document in documents:
-        # 没有由当前本地模型生成的向量时，不以其他算法替代语义检索。
-        if document.embedding is None:
-            continue
-        embedding = document.embedding
-        score = cosine_similarity(query_embedding, embedding)
-        # 指标别名是业务人员常用说法；命中时提高分数，避免短问题被向量噪声淹没。
-        alias_hit = any(alias.lower() in normalized_question for alias in [document.name, *document.aliases])
-        if alias_hit:
-            score = max(score, 0.85)
-        if score >= 0.2:
-            candidates.append(RetrievedMetric(metric_code=document.metric_code, score=score))
-    candidates.sort(key=lambda item: item.score, reverse=True)
-    return candidates[:2]
+def retrieve_metrics(
+    question: str, documents: list[MetricDocument], query_embedding: list[float]
+) -> list[RetrievedMetric]:
+    """兼容既有单 Query 调用；实际召回也统一经过向量、BM25 与 RRF。"""
+    return retrieve_metrics_for_queries((question,), documents, [query_embedding])
+
+
+def retrieve_metrics_for_queries(
+    queries: tuple[str, ...],
+    documents: list[MetricDocument],
+    query_embeddings: list[list[float] | None],
+) -> list[RetrievedMetric]:
+    """多 Query 混合召回指标定义，保留别名这一强业务信号。"""
+    document_by_code = {document.metric_code: document for document in documents}
+
+    def dense_score(document: MetricDocument, query: str, vector: list[float]) -> float:
+        score = cosine_similarity(vector, document.embedding or [])
+        alias_hit = any(
+            alias.lower() in query.lower() for alias in [document.name, *document.aliases]
+        )
+        return max(score, 0.85) if alias_hit else score
+
+    fused = hybrid_retrieve(
+        documents,
+        queries,
+        query_embeddings,
+        get_id=lambda document: document.metric_code,
+        get_text=lambda document: document.retrieval_text,
+        get_embedding=lambda document: document.embedding,
+        dense_score=dense_score,
+    )
+    return [
+        RetrievedMetric(metric_code=candidate.item_id, score=candidate.rrf_score)
+        for candidate in fused
+        if candidate.item_id in document_by_code
+    ][:2]
 
 
 async def seed_metric_definitions(session: AsyncSession) -> None:
@@ -238,13 +258,17 @@ async def query_metrics_for_question(
 
     active_settings = settings or get_settings()
     active_query_embedding = query_embedding or await _query_embedding(question, active_settings)
-    if active_query_embedding is None:
-        return None
-    embeddings_ready = await _ensure_definition_embeddings(session, definitions, active_settings)
-    if not embeddings_ready:
-        return None
+    # 只有向量检索可用时才尝试补齐指标向量；BM25 仍可在模型暂不可用时查询已启用定义。
+    if active_query_embedding is not None:
+        await _ensure_definition_embeddings(session, definitions, active_settings)
     documents = [_to_document(definition) for definition in definitions]
-    requested = retrieve_metrics(question, documents, active_query_embedding)
+    queries = await expand_queries(question, active_settings)
+    if not queries:
+        return None
+    query_embeddings = await embed_expanded_queries(
+        queries, active_settings, active_query_embedding
+    )
+    requested = retrieve_metrics_for_queries(queries, documents, query_embeddings)
     if not requested:
         return None
 

@@ -31,8 +31,9 @@ FastAPI API 服务
 
 ```text
 用户问题
-  -> 为问题生成嵌入向量（优先使用配置的通用嵌入模型）
-  -> 在 metric_definitions 中与指标名称、描述、别名和向量进行相似度匹配
+  -> 保留原始问题，并由已配置 LLM 最多生成 2 条受限检索改写（不可改变时间、活动或指标条件）
+  -> 每条 Query 分别在 metric_definitions 中执行向量检索与中文 BM25 检索
+  -> 使用 RRF 按排名融合、按 metric_code 去重，并保留业务别名的强命中信号
   -> 选出相关指标，递归补齐 dependency_codes 中的前置指标
   -> 从明确活动期或日期范围构造 1 至 4 个 MetricQueryUnit
   -> 对每个单元只执行前置基础指标对应的受控 SQL 模板
@@ -46,7 +47,7 @@ SQL 模板存储在表中以便维护指标口径，但执行前必须与后端�
 
 指标工具每轮仍只真实执行一次，但该次调用可承载多个受控查询单元。若问题明确包含多个日期范围，或同时提到多个已登记活动（当前为 618、七夕、春季上新），`MetricQueryPlan` 会按原文顺序构造对应范围；它优先于会话中继承的单一 `start_date/end_date`，避免“对比 618 和七夕”被旧会话条件缩窄为一个活动。单次最多 4 个单元，超过时整体返回可解释的空结果，不执行部分查询。每个单元使用同一批指标定义、依赖关系和受控 SQL 模板；结果包含各区间数值，以及后续区间相对首个区间的数值差异（比例指标使用百分点）。归因和建议仍只由 Agent 基于这些已验证依据生成。
 
-嵌入配置采用手动引入的本地模型。模型文件由宿主机下载并挂载到 API 容器，运行时通过 Sentence Transformers 直接加载，不调用外部 Embeddings API。模型未加载或指标向量未重建时，指标 RAG 不查询数据，并记录明确日志。
+嵌入配置采用手动引入的本地模型。模型文件由宿主机下载并挂载到 API 容器，运行时通过 Sentence Transformers 直接加载，不调用外部 Embeddings API。指标定义数量较少、别名与依赖关系属于强业务规则，因此不使用 CrossEncoder 精排；向量模型不可用时，仍可由 BM25 在已启用的指标定义中进行受限召回，最终 SQL 安全边界不变。
 
 ## 1.2 知识库 RAG 查询流程
 
@@ -65,12 +66,14 @@ SQL 模板存储在表中以便维护指标口径，但执行前必须与后端�
   -> 与缓存的“指标 / 知识库 / 综合 / 联网 / 内外部综合”意图原型比较相似度
   -> 高置信度且分差足够：只进入对应 RAG
   -> 低置信度或意图接近：同时进入两类 RAG
-  -> 指标 RAG 按需执行受控 SQL / 知识库余弦相似度 Top-4 检索
+  -> 指标 RAG 按需执行受控 SQL / 知识库多 Query 混合检索与精排
   -> 数据结果 + 文档标题/页码作为并列依据
   -> LLM 归纳结论、建议与验证动作
 ```
 
 意图路由复用与后续检索相同的本地问题向量，不额外调用 LLM，也不会引入外部 Embeddings API。“指标查询”“知识库问答”“综合分析”“联网检索”“内外部综合分析”五段稳定的原型描述首次使用时向量化并按模型路径、模型标识和设备缓存在 API 进程内。高置信度的“内外部综合分析”会同时调用三类工具；最高相似度低于 `0.45`，或第一、第二意图的分差小于 `0.06` 时，系统保守地降级为仅检索内部的综合分析，避免不确定问题造成不必要的联网搜索消耗。用户仍可通过 API 的 `mode=metrics`、`mode=knowledge` 或 `mode=web` 显式限定来源，前端默认使用自动路由。
+
+知识库检索的完整阶段为：保留原始问题 → 可选的最多 2 条 Query 改写 → 每条 Query 的向量与 BM25 Top-20 召回 → RRF（`k=60`）融合并按 `knowledge_chunk.id` 去重 → 最多 30 个候选进入本地 CrossEncoder 精排 → 返回 Top-4 片段。改写仅影响“找什么资料”，不会改变原始问题、分组过滤或受控指标 SQL 的日期参数；LLM 未配置、改写失败或输出非 JSON 时仅使用原问题。精排模型未挂载、加载失败时不阻断问答，保留 RRF 排序作为确定性降级。
 
 本地模型未就绪时，文件仍会保存为 `pending_embedding`，不会参与知识库检索。模型下载完成后执行 `python -m app.reindex_embeddings`，可同时重建指标定义和知识库片段向量。删除资料时，数据库以外键级联删除 `knowledge_chunks`（含向量），随后删除 `uploads/` 中的原文件。
 
@@ -79,6 +82,10 @@ SQL 模板存储在表中以便维护指标口径，但执行前必须与后端�
 | `LOCAL_EMBEDDING_MODEL_PATH` | 使用本地语义检索时必填 | 容器中的模型目录，默认 `/models/bge-small-zh-v1.5` |
 | `LOCAL_EMBEDDING_MODEL_ID` | 建议填写 | 模型名称或固定版本，用于判断是否需要重建向量 |
 | `LOCAL_EMBEDDING_DEVICE` | 可选 | 推理设备，默认 `cpu` |
+| `LOCAL_RERANKER_MODEL_PATH` | 启用知识库精排时必填 | 本地 CrossEncoder 目录，默认 `/models/bge-reranker-base` |
+| `LOCAL_RERANKER_MODEL_ID` | 建议填写 | 精排模型名称或固定版本，默认 `BAAI/bge-reranker-base` |
+| `LOCAL_RERANKER_DEVICE` | 可选 | 精排推理设备，默认 `cpu` |
+| `RAG_QUERY_EXPANSION_MAX_QUERIES` | 可选 | LLM 检索改写数量，默认 `2`；设为 `0` 时禁用改写 |
 
 当前时间解析支持“最近 7 天”（默认）、“最近 14 天/近 14 天/两周”、“上周”，以及“2026 年 6 月 6 日至 6 月 18 日”这类完整年份的日期区间。新增更多时间范围、渠道或商品维度时，应扩展受控参数解析和模板注册表，不能直接把用户输入拼入 SQL。
 
@@ -114,6 +121,8 @@ SQL 模板存储在表中以便维护指标口径，但执行前必须与后端�
 | 后端 | Python 3.12、FastAPI、Uvicorn | REST API、SSE 流式回答与健康检查 |
 | Agent | DeepAgent、LangChain、LangGraph | Agent 执行、多步骤编排、模型与工具抽象 |
 | 联网检索 | Tavily Search API、HTTPX | 受控获取公开且有时效性的信息；不引入额外 SDK |
+| 混合检索 | jieba、rank-bm25、RRF | 中文分词与精确关键词召回，并按排名融合向量与 BM25 结果 |
+| 本地精排 | Sentence Transformers CrossEncoder、`BAAI/bge-reranker-base` | 对 RRF 去重后的知识库候选进行问题—片段相关性判断；模型缺失时降级为 RRF 顺序 |
 | 数据库 | PostgreSQL | 保存会话、消息、业务数据、指标定义与知识库片段 |
 | 本地认证 | Python 标准库 `hashlib.scrypt`、FastAPI HTTP Bearer | 保存带盐密码散列，签发并校验可撤销的登录令牌；不新增认证依赖 |
 | ORM | SQLAlchemy、asyncpg、Alembic | 异步访问 PostgreSQL 与管理表结构迁移 |
@@ -311,7 +320,7 @@ API 容器启动时会先执行数据库迁移，再运行 `python -m app.seed`�
 
 如需重新生成测试业务数据，可在人工确认后执行 `docker compose exec api python -m app.seed --reset-business-data`。该命令会永久删除 `products` 和 `daily_metrics` 中的全部记录，再写入上述 2026 年模拟商品和指标；不会删除账号、会话、记忆、指标定义或知识库文件，不能用于保留真实业务数据的环境。知识库原始文件保存在 `uploads/` 挂载目录，重建 API 容器不会丢失；不要随意删除该目录。
 
-本地语义向量模型不随镜像或 Git 仓库提交。首次使用依次执行 `docker compose build api model-download`、`docker compose run --rm model-download`、`docker compose up -d api` 和 `docker compose exec api python -m app.reindex_embeddings`。模型会下载到宿主机的 `models/bge-small-zh-v1.5` 并以只读卷挂载到 API 容器；下载完成后重建指标定义和知识库片段向量。API 运行期间不会下载模型或调用外部嵌入 API。
+本地语义向量与精排模型不随镜像或 Git 仓库提交。首次使用依次执行 `docker compose build api model-download`、`docker compose run --rm model-download`、`docker compose up -d api` 和 `docker compose exec api python -m app.reindex_embeddings`。下载工具会将嵌入模型保存到 `models/bge-small-zh-v1.5`、精排模型保存到 `models/bge-reranker-base`，随后均以只读卷挂载给 API；下载完成后重建指标定义和知识库片段向量。需要暂时跳过精排模型时可执行 `docker compose run --rm model-download python -m app.download_embedding_model --skip-reranker`。API 运行期间不会下载模型或调用外部嵌入 API。
 
 镜像为 CPU 推理预装 PyTorch CPU 轮子，不会安装 CUDA 运行库；如后续需要 GPU 推理，应单独提供 GPU 镜像与 `LOCAL_EMBEDDING_DEVICE` 配置，而不是在默认镜像中混入 CUDA 依赖。
 

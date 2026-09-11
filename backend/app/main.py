@@ -9,6 +9,7 @@ from app.api import auth, conversations, knowledge, memory_candidates, metrics
 from app.config import get_settings
 from app.database import SessionLocal, close_database, create_tables
 from app.services.local_embeddings import preload_model
+from app.services.local_reranker import preload_reranker_model
 from app.services.agent_audit import cleanup_expired_agent_audits
 
 settings = get_settings()
@@ -34,6 +35,8 @@ async def lifespan(_: FastAPI):
     await create_tables()
     # 模型目录已挂载时仅在启动期加载一次；缺失时记录日志，指标 RAG 不提供数据上下文。
     await preload_model(settings)
+    # 精排仅影响知识库候选顺序；模型缺失时自动保留 RRF 融合结果。
+    await preload_reranker_model(settings)
     cleanup_task = asyncio.create_task(_audit_cleanup_loop(), name="agent-audit-cleanup")
     try:
         yield

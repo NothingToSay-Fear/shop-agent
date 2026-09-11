@@ -14,6 +14,10 @@ class Settings(BaseSettings):
     local_embedding_model_path: str | None = None
     local_embedding_model_id: str = "BAAI/bge-small-zh-v1.5"
     local_embedding_device: str = "cpu"
+    local_reranker_model_path: str | None = None
+    local_reranker_model_id: str = "BAAI/bge-reranker-base"
+    local_reranker_device: str = "cpu"
+    rag_query_expansion_max_queries: int = 2
     knowledge_upload_dir: str = "/uploads"
     knowledge_max_upload_size_mb: int = 20
     web_search_provider: str = "tavily"
@@ -39,6 +43,11 @@ class Settings(BaseSettings):
     def local_embedding_enabled(self) -> bool:
         """仅在配置本地模型目录后启用本地语义向量化。"""
         return bool(self.local_embedding_model_path)
+
+    @property
+    def local_reranker_enabled(self) -> bool:
+        """仅在配置本地 CrossEncoder 目录后启用知识库精排。"""
+        return bool(self.local_reranker_model_path)
 
     @property
     def web_search_enabled(self) -> bool:

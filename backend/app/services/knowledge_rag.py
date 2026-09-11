@@ -7,8 +7,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings, get_settings
 from app.models import KnowledgeChunk, KnowledgeDocument
-from app.services.local_embeddings import embed_texts
+from app.services.hybrid_retrieval import FusedCandidate, hybrid_retrieve
+from app.services.local_reranker import rerank_texts
 from app.services.metric_rag import cosine_similarity
+from app.services.query_expansion import embed_expanded_queries, expand_queries
+
+RERANK_CANDIDATE_LIMIT = 30
+FINAL_KNOWLEDGE_CHUNK_LIMIT = 4
 
 
 @dataclass(frozen=True)
@@ -27,15 +32,8 @@ async def query_knowledge_for_question(
     settings: Settings | None = None,
     query_embedding: list[float] | None = None,
 ) -> KnowledgeQueryContext | None:
-    """仅检索已完成向量化的片段，避免以未处理资料作为问答依据。"""
+    """从已就绪资料中进行多 Query 混合召回，并只返回最可靠的少量片段。"""
     active_settings = settings or get_settings()
-    active_query_embedding = query_embedding
-    if active_query_embedding is None:
-        embeddings = await embed_texts([question], active_settings)
-        active_query_embedding = embeddings[0] if embeddings else None
-    if active_query_embedding is None:
-        return None
-
     statement = (
         select(KnowledgeChunk, KnowledgeDocument)
         .join(KnowledgeDocument, KnowledgeChunk.document_id == KnowledgeDocument.id)
@@ -44,23 +42,31 @@ async def query_knowledge_for_question(
     if group_name:
         statement = statement.where(KnowledgeDocument.group_name == group_name)
     rows = (await session.execute(statement)).all()
-    scored = sorted(
-        (
-            (cosine_similarity(active_query_embedding, chunk.embedding or []), chunk, document)
-            for chunk, document in rows
-            if chunk.embedding and len(chunk.embedding) == len(active_query_embedding)
-        ),
-        key=lambda item: item[0],
-        reverse=True,
+    if not rows:
+        return None
+    queries = await expand_queries(question, active_settings)
+    if not queries:
+        return None
+    query_embeddings = await embed_expanded_queries(
+        queries, active_settings, query_embedding
     )
-    selected = [item for item in scored[:4] if item[0] >= 0.35]
+    fused = hybrid_retrieve(
+        rows,
+        queries,
+        query_embeddings,
+        get_id=lambda row: row[0].id,
+        get_text=lambda row: _knowledge_retrieval_text(row[0], row[1]),
+        get_embedding=lambda row: row[0].embedding,
+        dense_score=lambda row, _query, vector: cosine_similarity(vector, row[0].embedding or []),
+    )
+    selected = await _rerank_candidates(question, fused, rows, active_settings)
     if not selected:
         return None
 
     text_parts = ["以下内容来自知识库。仅可依据这些资料回答；资料未提及的内容请明确说明。"]
     references: list[str] = []
     reference_ids: list[str] = []
-    for _, chunk, document in selected:
+    for chunk, document in selected:
         location = f"第 {chunk.page_number} 页" if chunk.page_number else f"片段 {chunk.chunk_index + 1}"
         text_parts.append(f"【{document.title}｜{location}】\n{chunk.content}")
         reference = f"{document.title}（{location}）"
@@ -74,6 +80,42 @@ async def query_knowledge_for_question(
         references="知识库：" + "、".join(references),
         reference_ids=tuple(reference_ids),
     )
+
+
+def _knowledge_retrieval_text(chunk: KnowledgeChunk, document: KnowledgeDocument) -> str:
+    """标题、标题层级和正文共同参与 BM25，提升活动名与规则词的精确召回。"""
+    return "\n".join(part for part in (document.title, chunk.heading, chunk.content) if part)
+
+
+async def _rerank_candidates(
+    question: str,
+    fused: list[FusedCandidate],
+    rows: list[tuple[KnowledgeChunk, KnowledgeDocument]],
+    settings: Settings,
+) -> list[tuple[KnowledgeChunk, KnowledgeDocument]]:
+    """在 RRF 去重后的候选上精排；模型不可用时稳定保留 RRF 排名。"""
+    row_by_id = {chunk.id: (chunk, document) for chunk, document in rows}
+    candidates = [
+        (candidate, row_by_id[candidate.item_id])
+        for candidate in fused[:RERANK_CANDIDATE_LIMIT]
+        if candidate.item_id in row_by_id
+    ]
+    if not candidates:
+        return []
+    scores = await rerank_texts(
+        question,
+        [_knowledge_retrieval_text(chunk, document) for _, (chunk, document) in candidates],
+        settings,
+    )
+    if scores is not None:
+        candidates = [
+            item
+            for _, item in sorted(
+                zip(scores, candidates, strict=True),
+                key=lambda pair: (-pair[0], -pair[1][0].rrf_score, pair[1][0].item_id),
+            )
+        ]
+    return [row for _, row in candidates[:FINAL_KNOWLEDGE_CHUNK_LIMIT]]
 
 
 async def reindex_knowledge_chunks(session: AsyncSession) -> int:
