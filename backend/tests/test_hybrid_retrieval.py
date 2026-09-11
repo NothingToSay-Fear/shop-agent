@@ -1,6 +1,12 @@
 from dataclasses import dataclass
+from types import SimpleNamespace
+
+import pytest
 
 from app.services.hybrid_retrieval import hybrid_retrieve, reciprocal_rank_fusion, tokenize_for_bm25
+from app.services import knowledge_rag
+from app.config import Settings
+from app.services.hybrid_retrieval import FusedCandidate
 from app.services.query_expansion import _normalize_expanded_queries
 
 
@@ -56,3 +62,29 @@ def test_query_expansion_keeps_original_query_and_limits_untrusted_output() -> N
     )
 
     assert result == ("618 怎么发券", "618 优惠券发放规则", "618 券领取条件")
+
+
+@pytest.mark.asyncio
+async def test_reranker_filters_candidates_below_configured_minimum_score(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """精排已成功运行时，低于阈值的候选不能作为知识库依据返回。"""
+    relevant_chunk = SimpleNamespace(id="relevant", heading=None, content="618 店铺券可以叠加")
+    irrelevant_chunk = SimpleNamespace(id="irrelevant", heading=None, content="七夕礼盒库存不足")
+    document = SimpleNamespace(title="活动资料")
+
+    async def fake_rerank(*_args: object, **_kwargs: object) -> list[float]:
+        return [0.82, 0.12]
+
+    monkeypatch.setattr(knowledge_rag, "rerank_texts", fake_rerank)
+    result = await knowledge_rag._rerank_candidates(
+        "618 优惠券能叠加吗",
+        [
+            FusedCandidate("relevant", 0.03, 2),
+            FusedCandidate("irrelevant", 0.02, 1),
+        ],
+        [(relevant_chunk, document), (irrelevant_chunk, document)],
+        Settings(knowledge_reranker_min_score=0.35),
+    )
+
+    assert result == [(relevant_chunk, document)]

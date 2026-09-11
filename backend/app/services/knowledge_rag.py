@@ -93,7 +93,7 @@ async def _rerank_candidates(
     rows: list[tuple[KnowledgeChunk, KnowledgeDocument]],
     settings: Settings,
 ) -> list[tuple[KnowledgeChunk, KnowledgeDocument]]:
-    """在 RRF 去重后的候选上精排；模型不可用时稳定保留 RRF 排名。"""
+    """在 RRF 去重后的候选上精排，并过滤低于校准阈值的片段。"""
     row_by_id = {chunk.id: (chunk, document) for chunk, document in rows}
     candidates = [
         (candidate, row_by_id[candidate.item_id])
@@ -110,11 +110,13 @@ async def _rerank_candidates(
     if scores is not None:
         candidates = [
             item
-            for _, item in sorted(
+            for score, item in sorted(
                 zip(scores, candidates, strict=True),
                 key=lambda pair: (-pair[0], -pair[1][0].rrf_score, pair[1][0].item_id),
             )
+            if score >= settings.knowledge_reranker_min_score
         ]
+    # 精排模型不可用时 scores 为 None，保留既有 RRF 顺序作为可用性降级。
     return [row for _, row in candidates[:FINAL_KNOWLEDGE_CHUNK_LIMIT]]
 
 

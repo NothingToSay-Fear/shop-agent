@@ -1,5 +1,6 @@
 from functools import lru_cache
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -17,6 +18,7 @@ class Settings(BaseSettings):
     local_reranker_model_path: str | None = None
     local_reranker_model_id: str = "BAAI/bge-reranker-base"
     local_reranker_device: str = "cpu"
+    knowledge_reranker_min_score: float = Field(default=0.35, ge=0, le=1)
     rag_query_expansion_max_queries: int = 2
     knowledge_upload_dir: str = "/uploads"
     knowledge_max_upload_size_mb: int = 20
