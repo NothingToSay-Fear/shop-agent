@@ -1,11 +1,17 @@
 from datetime import date
 from types import SimpleNamespace
 
+import pytest
+
 from app.services.metric_rag import (
     MetricDocument,
+    MetricQueryConstraints,
+    MetricQueryPlanError,
     _calculate_metric,
+    _format_unit_comparison,
     _parse_explicit_date_range,
     _resolve_dependencies,
+    build_metric_query_plan,
     retrieve_metrics,
 )
 
@@ -61,3 +67,60 @@ def test_explicit_date_range_uses_controlled_date_values() -> None:
     period = _parse_explicit_date_range("查询 2026 年 6 月 6 日至 6 月 18 日的 618 GMV")
 
     assert period == (date(2026, 6, 6), date(2026, 6, 18))
+
+
+def test_metric_query_plan_keeps_each_explicit_period_as_a_controlled_unit() -> None:
+    """同一句中的多个明确日期范围应拆成多个查询单元，而非只保留第一个范围。"""
+    plan = build_metric_query_plan(
+        "对比 2026 年 6 月 1 日至 6 月 20 日和 2026 年 8 月 10 日至 8 月 22 日的 GMV"
+    )
+
+    assert [(item.start_date, item.end_date) for item in plan.units] == [
+        (date(2026, 6, 1), date(2026, 6, 20)),
+        (date(2026, 8, 10), date(2026, 8, 22)),
+    ]
+
+
+def test_metric_query_plan_uses_multiple_activities_before_inherited_single_period() -> None:
+    """本轮明确比较多个活动时，不能被会话遗留的单一日期范围覆盖。"""
+    plan = build_metric_query_plan(
+        "对比 618 和七夕的 GMV、订单量",
+        MetricQueryConstraints(date(2026, 6, 1), date(2026, 6, 20)),
+    )
+
+    assert [item.label for item in plan.units] == ["618", "七夕"]
+    assert [(item.start_date, item.end_date) for item in plan.units] == [
+        (date(2026, 6, 1), date(2026, 6, 20)),
+        (date(2026, 8, 10), date(2026, 8, 22)),
+    ]
+
+
+def test_metric_query_plan_can_combine_an_activity_and_explicit_period() -> None:
+    """活动期和手动日期区间同时出现时，也应形成完整的对比计划。"""
+    plan = build_metric_query_plan("对比 618 与 2026 年 8 月 10 日至 8 月 22 日的 GMV")
+
+    assert [item.label for item in plan.units] == ["618", "2026 年 8 月 10 日至 8 月 22 日"]
+
+
+def test_metric_query_plan_rejects_excessive_periods_instead_of_partially_querying() -> None:
+    """超出上限时必须整体拒绝，避免用户误以为得到的是完整比较结果。"""
+    question = "；".join(
+        f"2026 年 {month} 月 1 日至 {month} 月 2 日" for month in range(1, 6)
+    )
+
+    with pytest.raises(MetricQueryPlanError, match="最多支持 4 个"):
+        build_metric_query_plan(question)
+
+
+def test_multi_period_comparison_keeps_metric_units_explicit() -> None:
+    """跨区间比较必须保留原始数值单位，比例指标则使用百分点。"""
+    definition = SimpleNamespace(metric_code="paid_gmv", name="支付 GMV")
+    comparison = _format_unit_comparison(
+        definition,
+        SimpleNamespace(label="618"),
+        1000.0,
+        SimpleNamespace(label="七夕"),
+        1250.0,
+    )
+
+    assert comparison == "七夕 相比 618，支付 GMV 变化 250.00 元（+25.00%）。"

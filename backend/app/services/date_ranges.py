@@ -47,6 +47,28 @@ def parse_explicit_date_range(
     return None
 
 
+def parse_explicit_date_ranges(
+    text: str, default_year: int = DEMO_DATA_YEAR
+) -> list[tuple[str, tuple[date, date]]]:
+    """识别文本中全部互不重叠的日期区间，供多查询单元计划使用。"""
+    matches: list[tuple[int, int, str, tuple[date, date]]] = []
+    for pattern, use_default_year in (
+        (_CHINESE_RANGE_PATTERN, False),
+        (_ISO_RANGE_PATTERN, False),
+        (_MONTH_DAY_RANGE_PATTERN, True),
+        (_SLASH_RANGE_PATTERN, True),
+    ):
+        for match in pattern.finditer(text):
+            # 含年份的表达式同时可能匹配到其内部的“月/日”子串；保留优先级更高的完整表达式。
+            if any(match.start() < end and start < match.end() for start, end, _, _ in matches):
+                continue
+            period = _build_period(match.groupdict(), default_year, use_default_year)
+            if period is not None:
+                matches.append((match.start(), match.end(), match.group(0), period))
+    matches.sort(key=lambda item: item[0])
+    return [(label, period) for _, _, label, period in matches]
+
+
 def _build_period(
     values: dict[str, str | None], default_year: int, use_default_year: bool
 ) -> tuple[date, date] | None:

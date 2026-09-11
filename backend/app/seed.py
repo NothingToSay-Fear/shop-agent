@@ -1,10 +1,11 @@
 """初始化可重复执行的本地模拟经营数据。"""
 
+import argparse
 import asyncio
 from datetime import date, timedelta
 from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from app.database import SessionLocal, create_tables
 from app.models import DailyMetric, Product
@@ -52,6 +53,76 @@ DEMO_PRODUCTS = (
         "highlights": "通勤双肩包与保温杯礼盒组合，适合情侣与职场送礼场景",
     },
 )
+
+DEMO_YEAR = 2026
+DEMO_CHANNELS = (("内容种草", Decimal("1.00")), ("搜索广告", Decimal("0.72")))
+
+
+def _build_yearly_base_metric_seeds() -> tuple[dict[str, object], ...]:
+    """构造全年连续的基础模拟数据，数值固定以保证本地测试可复现。"""
+    rows: list[dict[str, object]] = []
+    month_factors = {
+        1: Decimal("0.82"),
+        2: Decimal("0.76"),
+        3: Decimal("0.98"),
+        4: Decimal("1.02"),
+        5: Decimal("1.08"),
+        6: Decimal("1.24"),
+        7: Decimal("0.94"),
+        8: Decimal("1.10"),
+        9: Decimal("0.97"),
+        10: Decimal("1.05"),
+        11: Decimal("1.32"),
+        12: Decimal("1.18"),
+    }
+    start_date = date(DEMO_YEAR, 1, 1)
+    for offset in range(365):
+        metric_date = start_date + timedelta(days=offset)
+        weekend_factor = Decimal("1.12") if metric_date.weekday() >= 5 else Decimal("1.00")
+        campaign_factor = Decimal("1.00")
+        price_factor = Decimal("1.00")
+        if date(DEMO_YEAR, 6, 1) <= metric_date <= date(DEMO_YEAR, 6, 20):
+            campaign_factor, price_factor = Decimal("1.28"), Decimal("0.94")
+        elif date(DEMO_YEAR, 8, 10) <= metric_date <= date(DEMO_YEAR, 8, 22):
+            campaign_factor, price_factor = Decimal("1.16"), Decimal("0.97")
+        elif date(DEMO_YEAR, 3, 8) <= metric_date <= date(DEMO_YEAR, 3, 14):
+            campaign_factor = Decimal("1.14")
+        for product_index, product in enumerate(DEMO_PRODUCTS):
+            for channel_index, (channel, channel_factor) in enumerate(DEMO_CHANNELS):
+                weekday_wave = Decimal("1.00") + Decimal((offset % 7) - 3) * Decimal("0.015")
+                base_visitors = Decimal(460 + product_index * 78 + (offset % 11) * 13)
+                visitors = int(
+                    base_visitors
+                    * month_factors[metric_date.month]
+                    * weekend_factor
+                    * campaign_factor
+                    * channel_factor
+                    * weekday_wave
+                )
+                conversion = Decimal("0.031") + Decimal(product_index) * Decimal("0.003")
+                if channel_index == 0:
+                    conversion += Decimal("0.004")
+                if campaign_factor > Decimal("1.00"):
+                    conversion += Decimal("0.003")
+                paid_orders = max(1, round(Decimal(visitors) * conversion))
+                refund_orders = (
+                    1 if (offset + product_index * 3 + channel_index * 5) % 17 == 0 else 0
+                )
+                rows.append(
+                    {
+                        "metric_date": metric_date,
+                        "channel": channel,
+                        "product_id": product["id"],
+                        "visitor_count": visitors,
+                        "paid_order_count": paid_orders,
+                        "paid_gmv": (Decimal(paid_orders) * product["price"] * price_factor).quantize(
+                            Decimal("0.01")
+                        ),
+                        "refund_order_count": refund_orders,
+                        "source": "demo",
+                    }
+                )
+    return tuple(rows)
 
 
 def _build_activity_metric_seeds() -> tuple[dict[str, object], ...]:
@@ -167,10 +238,12 @@ def _build_activity_metric_seeds() -> tuple[dict[str, object], ...]:
 
 
 ACTIVITY_METRIC_SEEDS = _build_activity_metric_seeds()
+YEARLY_BASE_METRIC_SEEDS = _build_yearly_base_metric_seeds()
+DEMO_METRIC_SEEDS = YEARLY_BASE_METRIC_SEEDS + ACTIVITY_METRIC_SEEDS
 
 
 async def seed_demo_data() -> None:
-    """增量写入通用与活动模拟数据，确保重复执行安全且不覆盖已有记录。"""
+    """在空业务库中初始化全年模拟数据；重复执行时不覆盖已有业务数据。"""
     await create_tables()
     async with SessionLocal() as session:
         # 指标知识独立于每日数据初始化；旧数据库升级后也能补齐 RAG 检索所需记录。
@@ -190,53 +263,45 @@ async def seed_demo_data() -> None:
         await session.flush()
 
         if existing_metric is None:
-            today = date.today()
-            channels = (("内容种草", 1.0), ("搜索广告", 0.72))
-            for days_ago in range(13, -1, -1):
-                metric_date = today - timedelta(days=days_ago)
-                # 最近一周访客下降，转化率略有提升，便于演示有依据的经营诊断。
-                is_current_week = days_ago <= 6
-                for product_index, product in enumerate(DEMO_PRODUCTS):
-                    for channel_index, (channel, channel_factor) in enumerate(channels):
-                        base_visitors = 620 + product_index * 95 + (days_ago % 4) * 28
-                        visitors = int(base_visitors * channel_factor * (0.88 if is_current_week else 1))
-                        conversion = 0.035 + product_index * 0.003 + (0.003 if is_current_week else 0)
-                        paid_orders = max(1, round(visitors * conversion))
-                        refund_orders = 1 if (days_ago + product_index + channel_index) % 6 == 0 else 0
-                        session.add(
-                            DailyMetric(
-                                metric_date=metric_date,
-                                channel=channel,
-                                product_id=product["id"],
-                                visitor_count=visitors,
-                                paid_order_count=paid_orders,
-                                paid_gmv=Decimal(paid_orders) * product["price"],
-                                refund_order_count=refund_orders,
-                                source="demo",
-                            )
-                        )
-
-        activity_keys = {
-            (metric_date, channel, product_id)
-            for metric_date, channel, product_id in (
-                await session.execute(
-                    select(
-                        DailyMetric.metric_date,
-                        DailyMetric.channel,
-                        DailyMetric.product_id,
-                    ).where(DailyMetric.channel.in_({item["channel"] for item in ACTIVITY_METRIC_SEEDS}))
-                )
-            ).all()
-        }
-        inserted_activity_metrics = 0
-        for metric in ACTIVITY_METRIC_SEEDS:
-            metric_key = (metric["metric_date"], metric["channel"], metric["product_id"])
-            if metric_key not in activity_keys:
-                session.add(DailyMetric(**metric))
-                inserted_activity_metrics += 1
+            session.add_all(DailyMetric(**metric) for metric in DEMO_METRIC_SEEDS)
         await session.commit()
-        print(f"已补齐 {inserted_activity_metrics} 条活动测试指标数据。")
+        if existing_metric is None:
+            print(f"已初始化 {len(DEMO_PRODUCTS)} 个模拟商品和 {len(DEMO_METRIC_SEEDS)} 条全年指标数据。")
+
+
+async def reset_demo_business_data() -> None:
+    """永久清空商品与日指标，再写入完整的 2026 年模拟业务数据。"""
+    await create_tables()
+    async with SessionLocal() as session:
+        await session.execute(delete(DailyMetric))
+        await session.execute(delete(Product))
+        await session.flush()
+        session.add_all(Product(**product, source="demo") for product in DEMO_PRODUCTS)
+        await session.flush()
+        session.add_all(DailyMetric(**metric) for metric in DEMO_METRIC_SEEDS)
+        # 指标定义属于 RAG 知识，保留既有内容并补齐缺失的内置定义。
+        await seed_metric_definitions(session)
+        await session.commit()
+        print(
+            f"已清空业务商品与指标，并写入 {len(DEMO_PRODUCTS)} 个商品、"
+            f"{len(DEMO_METRIC_SEEDS)} 条 2026 年模拟指标数据。"
+        )
+
+
+def _parse_arguments() -> argparse.Namespace:
+    """区分容器启动时的安全增量初始化与人工确认后的业务数据重置。"""
+    parser = argparse.ArgumentParser(description="管理本地模拟业务数据")
+    parser.add_argument(
+        "--reset-business-data",
+        action="store_true",
+        help="永久删除 products 和 daily_metrics 后重建全年模拟数据",
+    )
+    return parser.parse_args()
 
 
 if __name__ == "__main__":
-    asyncio.run(seed_demo_data())
+    arguments = _parse_arguments()
+    if arguments.reset_business_data:
+        asyncio.run(reset_demo_business_data())
+    else:
+        asyncio.run(seed_demo_data())

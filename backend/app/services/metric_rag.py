@@ -12,7 +12,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import Settings, get_settings
 from app.models import DailyMetric, MetricDefinition
 from app.services.local_embeddings import embed_texts
-from app.services.date_ranges import parse_explicit_date_range
+from app.services.activity_periods import ACTIVITY_PERIODS
+from app.services.date_ranges import parse_explicit_date_range, parse_explicit_date_ranges
+
+MAX_QUERY_UNITS = 4
 
 # 每个模板均为只读聚合查询，只允许固定的日期和数据源绑定参数。
 SUM_PAID_GMV_SQL = """
@@ -136,6 +139,7 @@ class MetricQueryContext:
 
     text: str
     metric_codes: tuple[str, ...]
+    query_units: tuple["MetricQueryUnit", ...] = ()
 
 
 @dataclass(frozen=True)
@@ -150,6 +154,26 @@ class MetricQueryConstraints:
         if self.start_date is None or self.end_date is None or self.start_date > self.end_date:
             return None
         return self.start_date, self.end_date
+
+
+@dataclass(frozen=True)
+class MetricQueryUnit:
+    """一组固定时间范围内、共享同一批指标的受控查询单元。"""
+
+    label: str
+    start_date: date
+    end_date: date
+
+
+@dataclass(frozen=True)
+class MetricQueryPlan:
+    """一个问题对应的一至多个查询单元，不携带任何动态 SQL。"""
+
+    units: tuple[MetricQueryUnit, ...]
+
+
+class MetricQueryPlanError(ValueError):
+    """用户表达的时间单元超出当前受控计划上限。"""
 
 
 def cosine_similarity(left: list[float], right: list[float]) -> float:
@@ -204,6 +228,8 @@ async def query_metrics_for_question(
     constraints: MetricQueryConstraints | None = None,
 ) -> MetricQueryContext | None:
     """检索用户需要的指标，补齐依赖后仅执行对应基础指标的受控 SQL。"""
+    # 先校验时间单元数量，避免超限问题继续消耗向量检索和数据库查询资源。
+    plan = build_metric_query_plan(question, constraints)
     definitions = list(
         await session.scalars(select(MetricDefinition).where(MetricDefinition.enabled.is_(True)))
     )
@@ -225,29 +251,129 @@ async def query_metrics_for_question(
     definition_map = {definition.metric_code: definition for definition in definitions}
     requested_codes = [item.metric_code for item in requested]
     resolved_codes = _resolve_dependencies(requested_codes, definition_map)
-    period = (constraints.period if constraints is not None else None) or await _resolve_period(session, question)
-    if period is None:
+    if not plan.units:
+        fallback_period = await _resolve_period(session, question)
+        if fallback_period is None:
+            return None
+        plan = MetricQueryPlan((MetricQueryUnit("当前查询范围", *fallback_period),))
+    if not plan.units:
         return None
-    start_date, end_date = period
 
-    values: dict[str, float] = {}
-    for metric_code in resolved_codes:
-        definition = definition_map[metric_code]
-        if definition.query_template:
-            values[metric_code] = await _execute_controlled_template(
-                session, definition.query_template, start_date, end_date
-            )
-    for metric_code in resolved_codes:
-        definition = definition_map[metric_code]
-        if definition.calculation_formula:
-            values[metric_code] = _calculate_metric(definition.calculation_formula, values)
+    values_by_unit: list[dict[str, float]] = []
+    for unit in plan.units:
+        values: dict[str, float] = {}
+        for metric_code in resolved_codes:
+            definition = definition_map[metric_code]
+            if definition.query_template:
+                values[metric_code] = await _execute_controlled_template(
+                    session, definition.query_template, unit.start_date, unit.end_date
+                )
+        for metric_code in resolved_codes:
+            definition = definition_map[metric_code]
+            if definition.calculation_formula:
+                values[metric_code] = _calculate_metric(definition.calculation_formula, values)
+        values_by_unit.append(values)
 
     requested_definitions = [definition_map[code] for code in requested_codes]
-    lines = [f"数据来源：内置模拟经营数据；查询范围：{start_date} 至 {end_date}。"]
-    for definition in requested_definitions:
-        value = values.get(definition.metric_code, 0.0)
-        lines.append(f"{definition.name}：{_format_value(definition.metric_code, value)}。")
-    return MetricQueryContext(text="\n".join(lines), metric_codes=tuple(requested_codes))
+    lines = ["数据来源：内置模拟经营数据。"]
+    for unit, values in zip(plan.units, values_by_unit, strict=True):
+        lines.append(f"【{unit.label}：{unit.start_date} 至 {unit.end_date}】")
+        for definition in requested_definitions:
+            value = values.get(definition.metric_code, 0.0)
+            lines.append(f"{definition.name}：{_format_value(definition.metric_code, value)}。")
+    if len(plan.units) > 1:
+        lines.append("【区间对比】")
+        baseline_unit, baseline_values = plan.units[0], values_by_unit[0]
+        for unit, values in zip(plan.units[1:], values_by_unit[1:], strict=True):
+            for definition in requested_definitions:
+                lines.append(
+                    _format_unit_comparison(
+                        definition,
+                        baseline_unit,
+                        baseline_values.get(definition.metric_code, 0.0),
+                        unit,
+                        values.get(definition.metric_code, 0.0),
+                    )
+                )
+    return MetricQueryContext(
+        text="\n".join(lines),
+        metric_codes=tuple(requested_codes),
+        query_units=plan.units,
+    )
+
+
+def build_metric_query_plan(
+    question: str, constraints: MetricQueryConstraints | None = None
+) -> MetricQueryPlan:
+    """从明确活动或日期范围构建多查询单元，优先保留用户本轮给出的多区间表达。"""
+    explicit_units = _explicit_period_units(question)
+    activity_units = _activity_period_units(question)
+    explicit_or_activity_units = _sort_query_units_by_question_order(
+        question, [*explicit_units, *activity_units]
+    )
+    if len(explicit_or_activity_units) > 1:
+        return _make_query_plan(explicit_or_activity_units)
+    if constraints is not None and constraints.period is not None:
+        return _make_query_plan((MetricQueryUnit("已确认时间范围", *constraints.period),))
+    if explicit_units:
+        return _make_query_plan(explicit_units)
+    if activity_units:
+        return _make_query_plan(activity_units)
+    return MetricQueryPlan(())
+
+
+def _explicit_period_units(question: str) -> tuple[MetricQueryUnit, ...]:
+    """将每段明确日期表达变成一个查询单元，并按原文出现顺序去重。"""
+    units = [MetricQueryUnit(label, *period) for label, period in parse_explicit_date_ranges(question)]
+    return _deduplicate_query_units(units)
+
+
+def _activity_period_units(question: str) -> tuple[MetricQueryUnit, ...]:
+    """识别问题中全部已登记活动，避免会话单一活动条件覆盖本轮对比对象。"""
+    lowered = question.lower()
+    matched: list[tuple[int, MetricQueryUnit]] = []
+    for activity, (aliases, start_date, end_date) in ACTIVITY_PERIODS.items():
+        positions = [lowered.find(alias.lower()) for alias in aliases if lowered.find(alias.lower()) >= 0]
+        if positions:
+            matched.append((min(positions), MetricQueryUnit(activity, start_date, end_date)))
+    matched.sort(key=lambda item: item[0])
+    return _deduplicate_query_units([unit for _, unit in matched])
+
+
+def _deduplicate_query_units(units: list[MetricQueryUnit]) -> tuple[MetricQueryUnit, ...]:
+    seen_periods: set[tuple[date, date]] = set()
+    unique: list[MetricQueryUnit] = []
+    for unit in units:
+        period = (unit.start_date, unit.end_date)
+        if period not in seen_periods:
+            seen_periods.add(period)
+            unique.append(unit)
+    return tuple(unique)
+
+
+def _sort_query_units_by_question_order(
+    question: str, units: list[MetricQueryUnit] | tuple[MetricQueryUnit, ...]
+) -> tuple[MetricQueryUnit, ...]:
+    """合并活动期和显式日期时，尽量按用户表达顺序确定对比基准。"""
+    lowered = question.lower()
+
+    def position(unit: MetricQueryUnit) -> int:
+        if unit.label in ACTIVITY_PERIODS:
+            aliases = ACTIVITY_PERIODS[unit.label][0]
+            matched_positions = [lowered.find(alias.lower()) for alias in aliases]
+            visible_positions = [item for item in matched_positions if item >= 0]
+            if visible_positions:
+                return min(visible_positions)
+        visible_position = lowered.find(unit.label.lower())
+        return visible_position if visible_position >= 0 else len(question)
+
+    return _deduplicate_query_units(sorted(units, key=position))
+
+
+def _make_query_plan(units: tuple[MetricQueryUnit, ...]) -> MetricQueryPlan:
+    if len(units) > MAX_QUERY_UNITS:
+        raise MetricQueryPlanError(f"一次最多支持 {MAX_QUERY_UNITS} 个明确时间范围，请拆分后再查询。")
+    return MetricQueryPlan(units)
 
 
 async def _query_embedding(question: str, settings: Settings) -> list[float] | None:
@@ -363,6 +489,31 @@ def _calculate_metric(formula: str, values: dict[str, float]) -> float:
     if formula == "refund_order_count / paid_order_count":
         return values.get("refund_order_count", 0.0) / values.get("paid_order_count", 1.0) if values.get("paid_order_count") else 0.0
     raise ValueError(f"指标定义包含未登记的计算公式：{formula}")
+
+
+def _format_unit_comparison(
+    definition: MetricDefinition,
+    baseline_unit: MetricQueryUnit,
+    baseline_value: float,
+    compared_unit: MetricQueryUnit,
+    compared_value: float,
+) -> str:
+    """输出透明的确定性区间差异，归因和建议仍交由基于依据的回答层完成。"""
+    change = compared_value - baseline_value
+    if definition.metric_code in {"conversion_rate", "refund_rate"}:
+        return (
+            f"{compared_unit.label} 相比 {baseline_unit.label}，{definition.name}"
+            f"变化 {change * 100:+.2f} 个百分点。"
+        )
+    if baseline_value:
+        ratio = change / baseline_value
+        ratio_text = f"（{ratio:+.2%}）"
+    else:
+        ratio_text = "（基准值为 0，无法计算比例变化）"
+    return (
+        f"{compared_unit.label} 相比 {baseline_unit.label}，{definition.name} "
+        f"变化 {_format_value(definition.metric_code, change)}{ratio_text}。"
+    )
 
 
 def _format_value(metric_code: str, value: float) -> str:

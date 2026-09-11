@@ -8,7 +8,11 @@ from app.agent.tools.tracker import AgentToolTracker
 from app.agent.tools.registry import get_tool_specification
 from app.config import Settings
 from app.database import SessionLocal
-from app.services.metric_rag import MetricQueryConstraints, query_metrics_for_question
+from app.services.metric_rag import (
+    MetricQueryConstraints,
+    MetricQueryPlanError,
+    query_metrics_for_question,
+)
 
 
 def build_metric_rag_tool(tracker: AgentToolTracker, settings: Settings) -> BaseTool:
@@ -62,6 +66,16 @@ def build_metric_rag_tool(tracker: AgentToolTracker, settings: Settings) -> Base
                 started_at=started_at,
             )
             return context.text
+        except MetricQueryPlanError as error:
+            tracker.record_tool_call(
+                tool_name="query_metric_rag",
+                input_summary=input_summary,
+                result_summary=str(error),
+                status="empty",
+                started_at=started_at,
+                error_code="metric_query_plan_invalid",
+            )
+            return str(error)
         except Exception:
             tracker.record_tool_call(
                 tool_name="query_metric_rag",

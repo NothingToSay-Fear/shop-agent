@@ -1,7 +1,7 @@
 from datetime import date
 from decimal import Decimal
 
-from app.seed import ACTIVITY_METRIC_SEEDS
+from app.seed import ACTIVITY_METRIC_SEEDS, DEMO_METRIC_SEEDS, DEMO_PRODUCTS, YEARLY_BASE_METRIC_SEEDS
 
 
 def test_spring_review_fixture_matches_documented_result() -> None:
@@ -37,3 +37,18 @@ def test_618_fixture_covers_all_campaign_phases() -> None:
 
     assert len(rows) == 40
     assert {item["channel"] for item in rows} == {"内容种草（618）", "搜索广告（618）"}
+
+
+def test_yearly_base_fixture_covers_every_day_of_2026() -> None:
+    """全年基础模拟数据应覆盖每一天、每个商品和两个通用渠道。"""
+    dates = {item["metric_date"] for item in YEARLY_BASE_METRIC_SEEDS}
+
+    assert min(dates) == date(2026, 1, 1)
+    assert max(dates) == date(2026, 12, 31)
+    assert len(dates) == 365
+    assert len(YEARLY_BASE_METRIC_SEEDS) == 365 * len(DEMO_PRODUCTS) * 2
+
+
+def test_complete_demo_fixture_includes_yearly_and_activity_rows() -> None:
+    """重置后的完整数据集必须同时保留全年基础数据和活动专项数据。"""
+    assert len(DEMO_METRIC_SEEDS) == len(YEARLY_BASE_METRIC_SEEDS) + len(ACTIVITY_METRIC_SEEDS)

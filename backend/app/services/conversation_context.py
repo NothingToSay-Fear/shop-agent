@@ -11,15 +11,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import AgentRun, ConversationContext, Message, MetricDefinition
-from app.services.date_ranges import DEMO_DATA_YEAR, parse_explicit_date_range
+from app.services.activity_periods import ACTIVITY_PERIODS
+from app.services.date_ranges import parse_explicit_date_range
 from app.services.metric_rag import METRIC_DEFINITION_SEEDS
 
-# 演示数据中已登记的活动期。只有用户明确提到活动名称时才会采用，显式日期始终优先。
-ACTIVITY_PERIODS = {
-    "618": (("618", "六一八"), date(DEMO_DATA_YEAR, 6, 1), date(DEMO_DATA_YEAR, 6, 20)),
-    "七夕": (("七夕",), date(DEMO_DATA_YEAR, 8, 10), date(DEMO_DATA_YEAR, 8, 22)),
-    "春季上新": (("春季上新",), date(DEMO_DATA_YEAR, 3, 8), date(DEMO_DATA_YEAR, 3, 14)),
-}
 MetricHint = tuple[str, tuple[str, ...]]
 DEFAULT_METRIC_HINTS: tuple[MetricHint, ...] = tuple(
     (str(item["name"]), tuple([str(item["name"]), *[str(alias) for alias in item["aliases"]]]))
