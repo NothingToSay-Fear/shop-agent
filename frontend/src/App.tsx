@@ -24,7 +24,6 @@ import {
   Modal,
   Popconfirm,
   Radio,
-  Select,
   Space,
   Spin,
   Tabs,
@@ -41,7 +40,6 @@ import type {
   Conversation,
   KnowledgeDocument,
   KnowledgeDocumentContent,
-  KnowledgeGroup,
   Message,
   MemoryCandidate,
 } from "./types";
@@ -86,11 +84,8 @@ export function App() {
   const [loading, setLoading] = useState(true);
   const [streaming, setStreaming] = useState(false);
   const [streamingStatus, setStreamingStatus] = useState("");
-  const [knowledgeGroup, setKnowledgeGroup] = useState<string>();
   const [knowledgeOpen, setKnowledgeOpen] = useState(false);
   const [knowledgeDocuments, setKnowledgeDocuments] = useState<KnowledgeDocument[]>([]);
-  const [knowledgeGroups, setKnowledgeGroups] = useState<KnowledgeGroup[]>([]);
-  const [uploadGroup, setUploadGroup] = useState("活动规则");
   const [uploadSpace, setUploadSpace] = useState<"private" | "team">("private");
   const [knowledgeTab, setKnowledgeTab] = useState<"team" | "private">("team");
   const [uploadFile, setUploadFile] = useState<File>();
@@ -212,7 +207,7 @@ export function App() {
     setConversations([]);
     setActiveConversationId(undefined);
     setMessages([]);
-    setKnowledgeGroup(undefined);
+    setUploadSpace("private");
     setMemoryCandidates([]);
     setLoading(false);
     if (notice) message.warning(notice);
@@ -247,12 +242,7 @@ export function App() {
 
   async function loadKnowledge() {
     try {
-      const [documents, groups] = await Promise.all([
-        api.listKnowledgeDocuments(),
-        api.listKnowledgeGroups(),
-      ]);
-      setKnowledgeDocuments(documents);
-      setKnowledgeGroups(groups);
+      setKnowledgeDocuments(await api.listKnowledgeDocuments());
     } catch {
       message.error("加载知识库失败。");
     }
@@ -281,15 +271,14 @@ export function App() {
   }
 
   async function uploadKnowledgeDocument() {
-    if (!uploadFile || !uploadGroup.trim()) {
-      message.warning("请选择文件并填写分组名称。");
+    if (!uploadFile) {
+      message.warning("请选择要上传的文件。");
       return;
     }
     setUploading(true);
     try {
       const document = await api.uploadKnowledgeDocument(
         uploadFile,
-        uploadGroup.trim(),
         currentUser?.is_admin ? uploadSpace : "private",
       );
       message.success("文件已上传，正在后台建立索引。");
@@ -364,9 +353,7 @@ export function App() {
     if (!activeConversationId) return;
     try {
       await api.resetConversationContext(activeConversationId);
-    setKnowledgeGroup(undefined);
-    setUploadSpace("private");
-      message.success("本会话的活动、时间、指标和资料分组条件已重置。");
+      message.success("本会话的活动、时间和指标条件已重置。");
     } catch (error) {
       message.error(error instanceof Error ? error.message : "重置会话条件失败。");
     }
@@ -405,7 +392,6 @@ export function App() {
         activeConversationId,
         trimmedContent,
         "hybrid",
-        knowledgeGroup,
         (content) => setStreamingStatus(content),
         (chunk) => {
           setMessages((items) =>
@@ -504,9 +490,6 @@ export function App() {
                     <Typography.Text className="knowledge-document-name" ellipsis={{ tooltip: item.title }}>
                       {item.title}
                     </Typography.Text>
-                    <Tooltip title={item.group_name}>
-                      <Tag className="knowledge-document-group">{item.group_name}</Tag>
-                    </Tooltip>
                     {documentStatusTag(item)}
                   </div>
                 }
@@ -666,14 +649,6 @@ export function App() {
         </main>
         <footer className="composer">
           <div className="composer-knowledge">
-            <Tag color="blue">综合分析</Tag>
-            <Select
-              allowClear
-              placeholder="全部知识库分组"
-              value={knowledgeGroup}
-              onChange={setKnowledgeGroup}
-              options={knowledgeGroups.map((group) => ({ value: group.name, label: group.name }))}
-            />
             <Popconfirm
               title="重置本会话的继承条件？"
               description="不会删除历史消息或运行审计。"
@@ -717,12 +692,6 @@ export function App() {
           ) : (
             <Typography.Text type="secondary">上传的资料仅自己可见，默认加入你的问答检索。</Typography.Text>
           )}
-          <Input
-            value={uploadGroup}
-            maxLength={100}
-            onChange={(event) => setUploadGroup(event.target.value)}
-            placeholder="分组，例如：活动规则"
-          />
           <input
             key={uploadFile?.name ?? "empty"}
             className="file-input"

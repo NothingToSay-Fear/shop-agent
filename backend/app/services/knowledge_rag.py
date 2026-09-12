@@ -30,7 +30,6 @@ async def query_knowledge_for_question(
     session: AsyncSession,
     question: str,
     user_id: str | None,
-    group_name: str | None = None,
     settings: Settings | None = None,
     query_embedding: list[float] | None = None,
 ) -> KnowledgeQueryContext | None:
@@ -55,8 +54,6 @@ async def query_knowledge_for_question(
             or_(KnowledgeDocument.space == "team", KnowledgeDocument.owner_user_id == user_id),
         )
     )
-    if group_name:
-        statement = statement.where(KnowledgeDocument.group_name == group_name)
     rows = (await session.execute(statement)).all()
     if not rows:
         return None

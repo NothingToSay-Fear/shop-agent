@@ -36,7 +36,6 @@ class OperationAgent:
         self,
         user_input: str,
         data_context: str | None = None,
-        knowledge_group: str | None = None,
         retrieval_mode: RetrievalMode = "hybrid",
         conversation_context: ConversationContextSnapshot | None = None,
         user_memory_context: UserMemoryContext | None = None,
@@ -46,7 +45,6 @@ class OperationAgent:
         async for event in self.stream_events(
             user_input,
             data_context,
-            knowledge_group,
             retrieval_mode,
             conversation_context,
             user_memory_context,
@@ -59,7 +57,6 @@ class OperationAgent:
         self,
         user_input: str,
         data_context: str | None = None,
-        knowledge_group: str | None = None,
         retrieval_mode: RetrievalMode = "hybrid",
         conversation_context: ConversationContextSnapshot | None = None,
         user_memory_context: UserMemoryContext | None = None,
@@ -80,7 +77,6 @@ class OperationAgent:
                 else:
                     result = await self.workflow.answer(
                         user_input,
-                        knowledge_group,
                         retrieval_mode,
                         publish_status,
                         conversation_context,

@@ -53,6 +53,5 @@ body { margin: 0; min-width: 1080px; }
 .knowledge-document-item .ant-list-item-action > li { padding: 0 2px; }
 .knowledge-document-title { display: flex; align-items: center; gap: 6px; min-width: 0; white-space: nowrap; }
 .knowledge-document-name { flex: 1 1 auto; min-width: 0; }
-.knowledge-document-group { display: inline-block; flex: 0 1 120px; max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
 .knowledge-document-title > .ant-tag:last-child { flex: 0 0 auto; }
 .knowledge-preview { white-space: pre-wrap; max-height: 60vh; overflow-y: auto; line-height: 1.75; }

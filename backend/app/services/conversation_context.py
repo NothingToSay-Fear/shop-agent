@@ -25,7 +25,6 @@ _CLEAR_FIELD_PATTERNS = {
     "activity": ("清除活动", "取消活动", "不限定活动"),
     "time_range": ("清除时间", "清除日期", "不限定时间", "不看活动期"),
     "metric_hints": ("清除指标", "不限定指标"),
-    "knowledge_group": ("清除资料分组", "取消资料分组", "不限定资料分组", "全部资料分组"),
     "analysis_goal": ("清除分析目标", "不限定分析目标"),
 }
 
@@ -52,7 +51,6 @@ class ConversationContextSnapshot:
     start_date: date | None = None
     end_date: date | None = None
     metric_hints: tuple[str, ...] = ()
-    knowledge_group: str | None = None
     analysis_goal: str | None = None
     field_sources: dict[str, str] | None = None
     recent_turn: RecentTurnSummary | None = None
@@ -67,8 +65,6 @@ class ConversationContextSnapshot:
             parts.append(f"时间={self.start_date} 至 {self.end_date}")
         if self.metric_hints:
             parts.append(f"指标={'、'.join(self.metric_hints)}")
-        if self.knowledge_group:
-            parts.append(f"资料分组={self.knowledge_group}")
         if self.analysis_goal:
             parts.append(f"目标={self.analysis_goal}")
         return "；".join(parts)
@@ -96,7 +92,6 @@ class ConversationContextSnapshot:
             "start_date": self.start_date.isoformat() if self.start_date else None,
             "end_date": self.end_date.isoformat() if self.end_date else None,
             "metric_hints": list(self.metric_hints),
-            "knowledge_group": self.knowledge_group,
             "analysis_goal": self.analysis_goal,
             "field_sources": dict(self.field_sources or {}),
             "recent_turn": (
@@ -142,14 +137,13 @@ async def build_and_persist_context(
     conversation_id: str,
     source_message_id: str,
     question: str,
-    selected_knowledge_group: str | None,
 ) -> ContextBuildResult:
     """读取会话状态，合并本轮明确条件，并在用户消息入库后立即持久化。"""
     record = await session.get(ConversationContext, conversation_id)
     previous = _snapshot_from_record(record)
     metric_hints = await _load_metric_hints(session)
     result = build_context_snapshot(
-        previous, question, selected_knowledge_group, source_message_id, metric_hints
+        previous, question, source_message_id, metric_hints
     )
     recent_turn = await _load_recent_turn_summary(session, conversation_id)
     result = replace(result, snapshot=replace(result.snapshot, recent_turn=recent_turn))
@@ -163,7 +157,6 @@ async def build_and_persist_context(
 def build_context_snapshot(
     previous: ConversationContextSnapshot,
     question: str,
-    selected_knowledge_group: str | None,
     source_message_id: str,
     metric_hints: Iterable[MetricHint] = DEFAULT_METRIC_HINTS,
 ) -> ContextBuildResult:
@@ -173,11 +166,10 @@ def build_context_snapshot(
         "start_date": previous.start_date,
         "end_date": previous.end_date,
         "metric_hints": previous.metric_hints,
-        "knowledge_group": previous.knowledge_group,
         "analysis_goal": previous.analysis_goal,
     }
     sources = dict(previous.field_sources or {})
-    explicit = _extract_explicit_conditions(question, selected_knowledge_group, metric_hints)
+    explicit = _extract_explicit_conditions(question, metric_hints)
     updated_fields: list[str] = []
     cleared_fields: list[str] = []
     for field_name, value in explicit.items():
@@ -202,7 +194,6 @@ def build_context_snapshot(
             start_date=values["start_date"],
             end_date=values["end_date"],
             metric_hints=values["metric_hints"],
-            knowledge_group=values["knowledge_group"],
             analysis_goal=values["analysis_goal"],
             field_sources=sources,
         ),
@@ -219,9 +210,7 @@ def build_retrieval_question(user_input: str, snapshot: ConversationContextSnaps
     return f"{user_input}\n\n已确认会话查询条件（仅用于限定本轮检索范围）：{snapshot.retrieval_question}"
 
 
-def _extract_explicit_conditions(
-    question: str, selected_knowledge_group: str | None, metric_hints: Iterable[MetricHint]
-) -> dict[str, object]:
+def _extract_explicit_conditions(question: str, metric_hints: Iterable[MetricHint]) -> dict[str, object]:
     lowered = question.lower()
     conditions = _extract_clear_conditions(lowered)
     activity_detected = False
@@ -245,8 +234,6 @@ def _extract_explicit_conditions(
     )
     if matched_metric_hints:
         conditions["metric_hints"] = matched_metric_hints
-    if selected_knowledge_group:
-        conditions["knowledge_group"] = selected_knowledge_group.strip()
     if "复盘" in question:
         conditions["analysis_goal"] = "活动复盘"
     elif "分析" in question:
@@ -255,7 +242,7 @@ def _extract_explicit_conditions(
 
 
 def _extract_clear_conditions(question: str) -> dict[str, object]:
-    fields = ("activity", "start_date", "end_date", "metric_hints", "knowledge_group", "analysis_goal")
+    fields = ("activity", "start_date", "end_date", "metric_hints", "analysis_goal")
     conditions: dict[str, object] = {}
     if any(pattern in question for pattern in _CLEAR_ALL_PATTERNS):
         return {
@@ -265,7 +252,7 @@ def _extract_clear_conditions(question: str) -> dict[str, object]:
         conditions["activity"] = None
     if any(pattern in question for pattern in _CLEAR_FIELD_PATTERNS["time_range"]):
         conditions.update({"activity": None, "start_date": None, "end_date": None})
-    for field_name in ("metric_hints", "knowledge_group", "analysis_goal"):
+    for field_name in ("metric_hints", "analysis_goal"):
         if any(pattern in question for pattern in _CLEAR_FIELD_PATTERNS[field_name]):
             conditions[field_name] = () if field_name == "metric_hints" else None
     return conditions
@@ -317,7 +304,6 @@ def _snapshot_from_record(record: ConversationContext | None) -> ConversationCon
         start_date=record.start_date,
         end_date=record.end_date,
         metric_hints=tuple(record.metric_hints or ()),
-        knowledge_group=record.knowledge_group,
         analysis_goal=record.analysis_goal,
         field_sources=dict(record.field_sources or {}),
     )
@@ -328,7 +314,6 @@ def _apply_snapshot(record: ConversationContext, snapshot: ConversationContextSn
     record.start_date = snapshot.start_date
     record.end_date = snapshot.end_date
     record.metric_hints = list(snapshot.metric_hints)
-    record.knowledge_group = snapshot.knowledge_group
     record.analysis_goal = snapshot.analysis_goal
     record.field_sources = dict(snapshot.field_sources or {})
 
@@ -339,7 +324,6 @@ def _field_label(field_name: str) -> str:
         "start_date": "时间范围",
         "end_date": "时间范围",
         "metric_hints": "指标",
-        "knowledge_group": "资料分组",
         "analysis_goal": "分析目标",
     }[field_name]
 

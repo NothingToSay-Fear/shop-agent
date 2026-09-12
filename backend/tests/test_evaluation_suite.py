@@ -107,7 +107,7 @@ async def test_agent_workflow_matches_fixed_evaluation_case(
     monkeypatch.setattr(workflow_module, "build_agent_tools", fake_build_agent_tools)
     workflow = AgentWorkflow(Settings(llm_api_key=None, llm_model=None))
 
-    result = await workflow.answer(case.question, None, "hybrid")
+    result = await workflow.answer(case.question, "hybrid")
 
     assert result.tracker.route is not None
     assert result.tracker.route.mode == case.route_mode

@@ -23,7 +23,7 @@ class AnswerGenerator:
     async def generate_from_context(self, user_input: str, data_context: str | None) -> str:
         """兼容测试和旧调用方注入上下文的回答路径。"""
         if self.settings.llm_enabled:
-            answer = await self.generate_with_llm(user_input, data_context, [], None)
+            answer = await self.generate_with_llm(user_input, data_context, [])
             if answer is not None:
                 return answer
             return self.generate_demo(user_input, data_context, model_error=True)
@@ -34,13 +34,10 @@ class AnswerGenerator:
         user_input: str,
         orchestration_context: str | None,
         tools: Sequence[BaseTool],
-        knowledge_group: str | None,
     ) -> str | None:
         """调用受限 DeepAgent；异常由调用方依据同一工具结果安全降级。"""
         try:
-            return await self._deep_agent_answer(
-                user_input, orchestration_context, tools, knowledge_group
-            )
+            return await self._deep_agent_answer(user_input, orchestration_context, tools)
         except Exception:
             logger.exception("模型回答生成失败，将切换到受控工具与演示回答兜底。")
             return None
@@ -50,7 +47,6 @@ class AnswerGenerator:
         user_input: str,
         orchestration_context: str | None,
         tools: Sequence[BaseTool],
-        knowledge_group: str | None,
     ) -> str:
         """创建最小权限 DeepAgent 并返回最后一条模型消息。"""
         from deepagents import create_deep_agent
@@ -72,7 +68,7 @@ class AnswerGenerator:
             subagents=[build_general_subagent(tools), build_review_subagent(tools)],
             # 覆盖框架默认文件系统中间件，只保留其要求的只读能力。
             middleware=[FilesystemMiddleware(tools=["read_file"])],
-            system_prompt=BASE_SYSTEM_PROMPT + PromptBuilder.tool_orchestration_prompt(knowledge_group),
+            system_prompt=BASE_SYSTEM_PROMPT + PromptBuilder.tool_orchestration_prompt(),
         )
         context_suffix = (
             f"\n\n系统编排要求：\n{orchestration_context}" if orchestration_context else ""

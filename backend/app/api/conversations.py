@@ -122,7 +122,6 @@ async def create_message(
         conversation_id,
         user_message.id,
         payload.content,
-        payload.knowledge_group,
     )
     memory_context = await MemoryService.retrieve_for_query(session, current_user.id, payload.content)
     await MemoryService.record_context_usage(session, current_user.id, memory_context)
@@ -150,7 +149,6 @@ async def create_message(
         try:
             async for event in agent.stream_events(
                 payload.content,
-                knowledge_group=payload.knowledge_group,
                 retrieval_mode=payload.mode,
                 conversation_context=context_result.snapshot,
                 user_memory_context=memory_context,

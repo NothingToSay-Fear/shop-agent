@@ -15,7 +15,6 @@ def test_document_response_includes_latest_index_job_progress() -> None:
         title="618 规则",
         original_filename="618.md",
         file_type="md",
-        group_name="活动规则",
         status="processing",
         error_message=None,
         chunk_count=0,

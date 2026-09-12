@@ -82,7 +82,6 @@ export interface KnowledgeDocument {
   title: string;
   original_filename: string;
   file_type: string;
-  group_name: string;
   status: string;
   error_message: string | null;
   chunk_count: number;
@@ -98,9 +97,4 @@ export interface KnowledgeDocument {
 
 export interface KnowledgeDocumentContent extends KnowledgeDocument {
   content: string;
-}
-
-export interface KnowledgeGroup {
-  name: string;
-  document_count: number;
 }

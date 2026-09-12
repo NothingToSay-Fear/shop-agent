@@ -120,7 +120,6 @@ class ConversationContext(Base, TimestampMixin):
     start_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     end_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     metric_hints: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
-    knowledge_group: Mapped[str | None] = mapped_column(String(100), nullable=True)
     analysis_goal: Mapped[str | None] = mapped_column(String(100), nullable=True)
     field_sources: Mapped[dict[str, str]] = mapped_column(JSON, nullable=False, default=dict)
 
@@ -174,7 +173,7 @@ class MetricDefinition(Base, TimestampMixin):
 
 
 class KnowledgeDocument(Base, TimestampMixin):
-    """运营资料的原始文件、分组和解析后全文。"""
+    """运营资料的原始文件和解析后全文。"""
 
     __tablename__ = "knowledge_documents"
 
@@ -187,7 +186,6 @@ class KnowledgeDocument(Base, TimestampMixin):
     original_filename: Mapped[str] = mapped_column(String(255), nullable=False)
     file_type: Mapped[str] = mapped_column(String(20), nullable=False)
     file_path: Mapped[str] = mapped_column(String(500), nullable=False)
-    group_name: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     content: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(String(30), nullable=False, default="processing")
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)

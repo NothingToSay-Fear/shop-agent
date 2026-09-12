@@ -41,7 +41,6 @@ class AgentWorkflow:
     async def answer(
         self,
         user_input: str,
-        knowledge_group: str | None,
         retrieval_mode: RetrievalMode,
         on_status: StatusCallback | None = None,
         conversation_context: ConversationContextSnapshot | None = None,
@@ -54,7 +53,6 @@ class AgentWorkflow:
         active_context = conversation_context or ConversationContextSnapshot()
         active_memory_context = user_memory_context or UserMemoryContext()
         retrieval_question = build_retrieval_question(user_input, active_context)
-        effective_knowledge_group = knowledge_group or active_context.knowledge_group
         if active_context.display:
             await self._emit_status(on_status, "context", "正在应用本会话已确认的查询条件…")
         if active_memory_context.items:
@@ -67,7 +65,6 @@ class AgentWorkflow:
         await self._run_execution_plan(
             tools,
             retrieval_question,
-            effective_knowledge_group,
             plan,
             tracker,
             on_status,
@@ -87,13 +84,11 @@ class AgentWorkflow:
                 user_input,
                 PromptBuilder.execution_instruction(
                     plan,
-                    effective_knowledge_group,
                     tracker.data_context,
                     active_context.generation_context,
                     active_memory_context.display,
                 ),
                 tools,
-                effective_knowledge_group,
             )
             if answer is not None:
                 return WorkflowResult(answer, tracker.references, tracker)
@@ -127,7 +122,6 @@ class AgentWorkflow:
     async def _run_execution_plan(
         tools: list[BaseTool],
         user_input: str,
-        knowledge_group: str | None,
         plan: ExecutionPlan,
         tracker: AgentToolTracker,
         on_status: StatusCallback | None,
@@ -144,8 +138,6 @@ class AgentWorkflow:
             if tool_name == "query_metric_rag":
                 payload["start_date"] = getattr(conversation_context, "start_date", None)
                 payload["end_date"] = getattr(conversation_context, "end_date", None)
-            if tool_name == "query_knowledge_rag":
-                payload["group_name"] = knowledge_group
             try:
                 await tool.ainvoke(payload)
             except Exception:

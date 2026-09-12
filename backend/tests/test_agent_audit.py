@@ -33,7 +33,7 @@ def test_tracker_aggregates_only_actual_reference_ids() -> None:
     )
     tracker.record_tool_call(
         tool_name="query_knowledge_rag",
-        input_summary="问题长度：10 个字符；资料分组：全部分组",
+        input_summary="问题长度：10 个字符；检索范围：当前用户已选择资料",
         result_summary="命中 1 个知识库片段",
         reference_ids=("metric:paid_gmv", "knowledge_chunk:chunk-1"),
         status="success",

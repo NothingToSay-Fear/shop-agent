@@ -98,7 +98,7 @@ async def test_workflow_executes_plan_before_real_model_generation(monkeypatch: 
 
     monkeypatch.setattr(workflow.answer_generator, "generate_with_llm", fake_generate_with_llm)
 
-    result = await workflow.answer("GMV 是多少", None, "metrics")
+    result = await workflow.answer("GMV 是多少", "metrics")
 
     assert result.answer == "基于受控结果的回答"
     assert events == ["query_metric_rag", "llm"]
@@ -144,7 +144,7 @@ async def test_workflow_passes_confirmed_context_to_controlled_tool(
         metric_hints=("支付订单数",),
     )
 
-    await workflow.answer("再看看订单量", None, "metrics", conversation_context=context)
+    await workflow.answer("再看看订单量", "metrics", conversation_context=context)
 
     assert captured_payload["question"] is not None
     assert "已确认会话查询条件" in captured_payload["question"]

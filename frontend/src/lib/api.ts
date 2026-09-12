@@ -5,7 +5,6 @@ import type {
   Conversation,
   KnowledgeDocument,
   KnowledgeDocumentContent,
-  KnowledgeGroup,
   Message,
   MemoryCandidate,
 } from "../types";
@@ -111,20 +110,15 @@ export const api = {
   },
   getMessageAudit: (conversationId: string, messageId: string) =>
     request<AgentRunAudit>(`/api/conversations/${conversationId}/messages/${messageId}/audit`),
-  listKnowledgeGroups: () => request<KnowledgeGroup[]>("/api/knowledge/groups"),
-  listKnowledgeDocuments: (groupName?: string) =>
-    request<KnowledgeDocument[]>(
-      `/api/knowledge/documents${groupName ? `?group_name=${encodeURIComponent(groupName)}` : ""}`,
-    ),
+  listKnowledgeDocuments: () => request<KnowledgeDocument[]>("/api/knowledge/documents"),
   getKnowledgeDocument: (documentId: string) =>
     request<KnowledgeDocumentContent>(`/api/knowledge/documents/${documentId}`),
   async uploadKnowledgeDocument(
-    file: File, groupName: string, space: "private" | "team" = "private",
+    file: File, space: "private" | "team" = "private",
   ): Promise<KnowledgeDocument> {
     // 文件上传不能使用全局 JSON 请求头，否则浏览器无法携带 multipart 边界。
     const body = new FormData();
     body.append("file", file);
-    body.append("group_name", groupName);
     body.append("space", space);
     const response = await fetch(`${API_URL}/api/knowledge/documents`, {
       method: "POST",
@@ -170,7 +164,6 @@ export const api = {
     conversationId: string,
     content: string,
     mode: "hybrid" | "metrics" | "knowledge" | "web",
-    knowledgeGroup: string | undefined,
     onStatus: (content: string, phase: string | undefined) => void,
     onChunk: (chunk: string) => void,
     onMemoryCandidate: (candidate: MemoryCandidate) => void,
@@ -180,7 +173,7 @@ export const api = {
     const response = await fetch(`${API_URL}/api/conversations/${conversationId}/messages`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...Object.fromEntries(buildHeaders()) },
-      body: JSON.stringify({ content, mode, knowledge_group: knowledgeGroup }),
+      body: JSON.stringify({ content, mode }),
     });
     handleUnauthorized(response.status);
     if (!response.ok || !response.body) {

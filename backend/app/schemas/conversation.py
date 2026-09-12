@@ -24,7 +24,6 @@ class MessageCreate(BaseModel):
     """发送给 Agent 的已校验用户输入。"""
     content: str = Field(min_length=1, max_length=4000)
     mode: Literal["hybrid", "metrics", "knowledge", "web"] = "hybrid"
-    knowledge_group: str | None = Field(default=None, max_length=100)
 
 
 class MessageRead(BaseModel):

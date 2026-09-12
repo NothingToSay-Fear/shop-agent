@@ -12,14 +12,13 @@ from app.services.knowledge_rag import query_knowledge_for_question
 def build_knowledge_rag_tool(
     tracker: AgentToolTracker, settings: Settings, user_id: str | None = None
 ) -> BaseTool:
-    """创建支持按资料分组检索的知识库工具。"""
+    """创建受用户资料选择范围约束的知识库工具。"""
 
     @tool("query_knowledge_rag")
-    async def query_knowledge_rag(question: str, group_name: str | None = None) -> str:
-        """检索运营资料知识库。适用于活动规则、玩法、商品资料、SOP、历史方案和复盘事实。可选 group_name 用于限定用户选择的资料分组。必须传入用户原始问题。"""
+    async def query_knowledge_rag(question: str) -> str:
+        """检索当前用户已选择参与问答的运营资料。适用于活动规则、玩法、商品资料、SOP、历史方案和复盘事实。必须传入用户原始问题。"""
         started_at = tracker.start_tool_call()
-        group_summary = group_name.strip() if group_name else "全部分组"
-        input_summary = f"问题长度：{len(question.strip())} 个字符；资料分组：{group_summary}"
+        input_summary = f"问题长度：{len(question.strip())} 个字符；检索范围：当前用户已选择资料"
         specification = get_tool_specification("query_knowledge_rag")
         if not tracker.reserve_tool_call("query_knowledge_rag", specification.max_calls_per_run):
             tracker.record_tool_call(
@@ -34,7 +33,7 @@ def build_knowledge_rag_tool(
         try:
             async with SessionLocal() as session:
                 context = await query_knowledge_for_question(
-                    session, question, user_id, group_name, settings=settings
+                    session, question, user_id, settings=settings
                 )
             tracker.knowledge_context = context
             tracker.knowledge_miss = context is None

@@ -1,4 +1,4 @@
-"""知识库文件的上传、浏览、下载与分组接口。"""
+"""知识库文件的上传、浏览与下载接口。"""
 
 import asyncio
 import logging
@@ -7,7 +7,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse
-from sqlalchemy import func, or_, select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
@@ -17,7 +17,6 @@ from app.schemas.knowledge import (
     KnowledgeDocumentContent,
     KnowledgeDocumentRead,
     KnowledgeDocumentRetrievalUpdate,
-    KnowledgeGroupRead,
 )
 from app.services.authentication import get_current_user
 from app.services.document_parser import SUPPORTED_FILE_TYPES
@@ -26,34 +25,17 @@ router = APIRouter(prefix="/api/knowledge", tags=["knowledge"])
 logger = logging.getLogger(__name__)
 
 
-@router.get("/groups", response_model=list[KnowledgeGroupRead])
-async def list_groups(
-    session: AsyncSession = Depends(get_session), current_user: User = Depends(get_current_user)
-) -> list[KnowledgeGroupRead]:
-    """返回已存在分组，供上传和检索范围选择。"""
-    result = await session.execute(
-        select(KnowledgeDocument.group_name, func.count(KnowledgeDocument.id))
-        .where(_visible_document_condition(current_user))
-        .group_by(KnowledgeDocument.group_name)
-        .order_by(KnowledgeDocument.group_name)
-    )
-    return [KnowledgeGroupRead(name=name, document_count=count) for name, count in result.all()]
-
-
 @router.get("/documents", response_model=list[KnowledgeDocumentRead])
 async def list_documents(
-    group_name: str | None = None,
     session: AsyncSession = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> list[KnowledgeDocumentRead]:
-    """按可选分组列出资料，默认返回全部。"""
+    """列出当前用户可见的资料。"""
     statement = (
         select(KnowledgeDocument)
         .where(_visible_document_condition(current_user))
         .order_by(KnowledgeDocument.created_at.desc())
     )
-    if group_name:
-        statement = statement.where(KnowledgeDocument.group_name == group_name)
     documents = list((await session.scalars(statement)).all())
     jobs = await _latest_jobs(session, [document.id for document in documents])
     enabled_ids = await _retrieval_enabled_document_ids(
@@ -68,17 +50,13 @@ async def list_documents(
 @router.post("/documents", response_model=KnowledgeDocumentRead, status_code=status.HTTP_202_ACCEPTED)
 async def upload_document(
     file: UploadFile = File(...),
-    group_name: str = Form(...),
     space: str = Form("private"),
     session: AsyncSession = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> KnowledgeDocumentRead:
     """快速保存原文件并创建持久化任务；耗时索引由独立 Worker 完成。"""
     settings = get_settings()
-    clean_group = group_name.strip()
     clean_space = space.strip().lower()
-    if not clean_group or len(clean_group) > 100:
-        raise HTTPException(status_code=422, detail="分组名称长度应为 1 至 100 个字符")
     if clean_space not in {"private", "team"}:
         raise HTTPException(status_code=422, detail="资料空间只能是 private 或 team")
     if clean_space == "team" and not current_user.is_admin:
@@ -110,7 +88,6 @@ async def upload_document(
         original_filename=original_filename[:255],
         file_type=suffix.lstrip("."),
         file_path=str(storage_path),
-        group_name=clean_group,
         # 解析正文由后台任务补齐；空字符串保证上传接口不会等待耗时解析。
         content="",
         status="queued",

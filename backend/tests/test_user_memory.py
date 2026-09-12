@@ -61,7 +61,6 @@ def test_memory_prompt_cannot_override_controlled_query_conditions() -> None:
 
     instruction = PromptBuilder.execution_instruction(
         plan,
-        None,
         "已验证的工具结果",
         "活动=618；指标=支付 GMV",
         context.display,
