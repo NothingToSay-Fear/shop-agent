@@ -15,7 +15,11 @@ from app.services.local_embeddings import embed_texts
 from app.services.activity_periods import ACTIVITY_PERIODS
 from app.services.date_ranges import parse_explicit_date_range, parse_explicit_date_ranges
 from app.services.hybrid_retrieval import hybrid_retrieve
-from app.services.query_expansion import embed_expanded_queries, expand_queries
+from app.services.query_expansion import (
+    PreparedRetrievalQueries,
+    embed_expanded_queries,
+    expand_queries,
+)
 
 MAX_QUERY_UNITS = 4
 
@@ -246,6 +250,7 @@ async def query_metrics_for_question(
     settings: Settings | None = None,
     query_embedding: list[float] | None = None,
     constraints: MetricQueryConstraints | None = None,
+    prepared_queries: PreparedRetrievalQueries | None = None,
 ) -> MetricQueryContext | None:
     """检索用户需要的指标，补齐依赖后仅执行对应基础指标的受控 SQL。"""
     # 先校验时间单元数量，避免超限问题继续消耗向量检索和数据库查询资源。
@@ -257,17 +262,26 @@ async def query_metrics_for_question(
         return None
 
     active_settings = settings or get_settings()
-    active_query_embedding = query_embedding or await _query_embedding(question, active_settings)
+    use_prepared_queries = prepared_queries is not None and prepared_queries.question == question.strip()
+    active_query_embedding = (
+        prepared_queries.original_embedding
+        if use_prepared_queries and prepared_queries is not None
+        else query_embedding or await _query_embedding(question, active_settings)
+    )
     # 只有向量检索可用时才尝试补齐指标向量；BM25 仍可在模型暂不可用时查询已启用定义。
     if active_query_embedding is not None:
         await _ensure_definition_embeddings(session, definitions, active_settings)
     documents = [_to_document(definition) for definition in definitions]
-    queries = await expand_queries(question, active_settings)
-    if not queries:
-        return None
-    query_embeddings = await embed_expanded_queries(
-        queries, active_settings, active_query_embedding
-    )
+    if use_prepared_queries and prepared_queries is not None:
+        queries = prepared_queries.queries
+        query_embeddings = list(prepared_queries.query_embeddings)
+    else:
+        queries = await expand_queries(question, active_settings)
+        if not queries:
+            return None
+        query_embeddings = await embed_expanded_queries(
+            queries, active_settings, active_query_embedding
+        )
     requested = retrieve_metrics_for_queries(queries, documents, query_embeddings)
     if not requested:
         return None

@@ -13,9 +13,14 @@ from app.services.metric_rag import (
     MetricQueryPlanError,
     query_metrics_for_question,
 )
+from app.services.query_expansion import PreparedRetrievalQueries
 
 
-def build_metric_rag_tool(tracker: AgentToolTracker, settings: Settings) -> BaseTool:
+def build_metric_rag_tool(
+    tracker: AgentToolTracker,
+    settings: Settings,
+    prepared_queries: PreparedRetrievalQueries | None = None,
+) -> BaseTool:
     """创建仅能执行已审核只读 SQL 模板的指标查询工具。"""
 
     @tool("query_metric_rag")
@@ -45,6 +50,7 @@ def build_metric_rag_tool(tracker: AgentToolTracker, settings: Settings) -> Base
                     question,
                     settings=settings,
                     constraints=MetricQueryConstraints(start_date=start_date, end_date=end_date),
+                    prepared_queries=prepared_queries,
                 )
             tracker.metric_context = context
             if context is None:

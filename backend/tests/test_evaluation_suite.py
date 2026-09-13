@@ -95,7 +95,10 @@ async def test_agent_workflow_matches_fixed_evaluation_case(
         return RetrievalRoute(case.route_mode, None, 1.0, False)
 
     def fake_build_agent_tools(
-        tracker: AgentToolTracker, _: Settings, __: str | None = None
+        tracker: AgentToolTracker,
+        _: Settings,
+        __: str | None = None,
+        ___: object | None = None,
     ) -> list[EvaluationTool]:
         return [
             EvaluationTool("query_metric_rag", tracker, case),

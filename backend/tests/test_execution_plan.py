@@ -81,7 +81,10 @@ async def test_workflow_executes_plan_before_real_model_generation(monkeypatch: 
             return "支付 GMV：100 元"
 
     def fake_build_agent_tools(
-        active_tracker: AgentToolTracker, _: Settings, __: str | None = None
+        active_tracker: AgentToolTracker,
+        _: Settings,
+        __: str | None = None,
+        ___: object | None = None,
     ) -> list[FakeTool]:
         nonlocal tracker
         tracker = active_tracker
@@ -128,7 +131,10 @@ async def test_workflow_passes_confirmed_context_to_controlled_tool(
             return "支付订单数：100"
 
     def fake_build_agent_tools(
-        active_tracker: AgentToolTracker, _: Settings, __: str | None = None
+        active_tracker: AgentToolTracker,
+        _: Settings,
+        __: str | None = None,
+        ___: object | None = None,
     ) -> list[FakeTool]:
         nonlocal tracker
         tracker = active_tracker

@@ -7,10 +7,14 @@ from app.agent.tools.registry import get_tool_specification
 from app.config import Settings
 from app.database import SessionLocal
 from app.services.knowledge_rag import query_knowledge_for_question
+from app.services.query_expansion import PreparedRetrievalQueries
 
 
 def build_knowledge_rag_tool(
-    tracker: AgentToolTracker, settings: Settings, user_id: str | None = None
+    tracker: AgentToolTracker,
+    settings: Settings,
+    user_id: str | None = None,
+    prepared_queries: PreparedRetrievalQueries | None = None,
 ) -> BaseTool:
     """创建受用户资料选择范围约束的知识库工具。"""
 
@@ -33,7 +37,7 @@ def build_knowledge_rag_tool(
         try:
             async with SessionLocal() as session:
                 context = await query_knowledge_for_question(
-                    session, question, user_id, settings=settings
+                    session, question, user_id, settings=settings, prepared_queries=prepared_queries
                 )
             tracker.knowledge_context = context
             tracker.knowledge_miss = context is None

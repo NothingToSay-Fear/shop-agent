@@ -17,6 +17,7 @@ from app.services.conversation_context import (
     build_retrieval_question,
 )
 from app.services.intent_router import RetrievalMode, RetrievalRoute, route_question
+from app.services.query_expansion import prepare_retrieval_queries
 from app.services.user_memory import UserMemoryContext
 
 StatusCallback = Callable[[str, str], Awaitable[None]]
@@ -49,7 +50,6 @@ class AgentWorkflow:
     ) -> WorkflowResult:
         """先完成并校验执行计划，再允许模型基于受控结果组织回答。"""
         tracker = AgentToolTracker()
-        tools = build_agent_tools(tracker, self.settings, user_id)
         active_context = conversation_context or ConversationContextSnapshot()
         active_memory_context = user_memory_context or UserMemoryContext()
         retrieval_question = build_retrieval_question(user_input, active_context)
@@ -61,6 +61,15 @@ class AgentWorkflow:
         route = await self._resolve_route(retrieval_question, retrieval_mode)
         tracker.set_route(route)
         plan = build_execution_plan(route)
+        prepared_queries = None
+        if any(
+            tool_name in {"query_metric_rag", "query_knowledge_rag"}
+            for tool_name in plan.required_tools
+        ):
+            prepared_queries = await prepare_retrieval_queries(
+                retrieval_question, self.settings, route.query_embedding
+            )
+        tools = build_agent_tools(tracker, self.settings, user_id, prepared_queries)
         await self._emit_status(on_status, "plan", f"已生成执行计划：{plan.summary}")
         await self._run_execution_plan(
             tools,

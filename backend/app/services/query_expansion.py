@@ -4,11 +4,26 @@ from __future__ import annotations
 
 import json
 import logging
+from dataclasses import dataclass
 
 from app.config import Settings
 from app.services.local_embeddings import embed_texts
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class PreparedRetrievalQueries:
+    """一次请求内可由多个 RAG 工具复用的检索表达与向量。"""
+
+    question: str
+    queries: tuple[str, ...]
+    query_embeddings: tuple[list[float] | None, ...]
+
+    @property
+    def original_embedding(self) -> list[float] | None:
+        """返回原问题向量；首条 Query 始终是原问题。"""
+        return self.query_embeddings[0] if self.query_embeddings else None
 
 QUERY_EXPANSION_PROMPT = """你是检索查询改写器。只根据用户问题给出最多 {max_queries} 条中文检索改写，
 用于在内部资料或指标定义中召回信息。改写必须保持活动、时间、指标、对象和问题意图不变，
@@ -66,6 +81,20 @@ async def embed_expanded_queries(
     if expanded_embeddings is None:
         return [original_embedding, *([None] * (len(queries) - 1))]
     return [original_embedding, *expanded_embeddings]
+
+
+async def prepare_retrieval_queries(
+    question: str, settings: Settings, original_embedding: list[float] | None = None
+) -> PreparedRetrievalQueries:
+    """一次完成 Query 改写和向量化，供指标与知识库检索共同复用。"""
+    normalized_question = question.strip()
+    queries = await expand_queries(normalized_question, settings)
+    query_embeddings = await embed_expanded_queries(queries, settings, original_embedding)
+    return PreparedRetrievalQueries(
+        question=normalized_question,
+        queries=queries,
+        query_embeddings=tuple(query_embeddings),
+    )
 
 
 def _normalize_expanded_queries(original: str, content: str, maximum: int) -> tuple[str, ...]:

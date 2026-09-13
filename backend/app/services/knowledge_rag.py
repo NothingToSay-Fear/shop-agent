@@ -11,7 +11,11 @@ from app.services.hybrid_retrieval import FusedCandidate, hybrid_retrieve
 from app.services.local_embeddings import embed_texts
 from app.services.local_reranker import rerank_texts
 from app.services.metric_rag import cosine_similarity
-from app.services.query_expansion import embed_expanded_queries, expand_queries
+from app.services.query_expansion import (
+    PreparedRetrievalQueries,
+    embed_expanded_queries,
+    expand_queries,
+)
 
 RERANK_CANDIDATE_LIMIT = 30
 FINAL_KNOWLEDGE_CHUNK_LIMIT = 4
@@ -32,6 +36,7 @@ async def query_knowledge_for_question(
     user_id: str | None,
     settings: Settings | None = None,
     query_embedding: list[float] | None = None,
+    prepared_queries: PreparedRetrievalQueries | None = None,
 ) -> KnowledgeQueryContext | None:
     """从已就绪资料中进行多 Query 混合召回，并只返回最可靠的少量片段。"""
     # 未携带已认证用户时不检索资料，避免兼容调用意外绕过用户选择范围。
@@ -57,12 +62,17 @@ async def query_knowledge_for_question(
     rows = (await session.execute(statement)).all()
     if not rows:
         return None
-    queries = await expand_queries(question, active_settings)
-    if not queries:
-        return None
-    query_embeddings = await embed_expanded_queries(
-        queries, active_settings, query_embedding
-    )
+    use_prepared_queries = prepared_queries is not None and prepared_queries.question == question.strip()
+    if use_prepared_queries and prepared_queries is not None:
+        queries = prepared_queries.queries
+        query_embeddings = list(prepared_queries.query_embeddings)
+    else:
+        queries = await expand_queries(question, active_settings)
+        if not queries:
+            return None
+        query_embeddings = await embed_expanded_queries(
+            queries, active_settings, query_embedding
+        )
     fused = hybrid_retrieve(
         rows,
         queries,
