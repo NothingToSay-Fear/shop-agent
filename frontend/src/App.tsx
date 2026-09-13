@@ -91,6 +91,7 @@ export function App() {
   const [uploadFile, setUploadFile] = useState<File>();
   const [uploading, setUploading] = useState(false);
   const [deletingDocumentId, setDeletingDocumentId] = useState<string>();
+  const [deletingConversationId, setDeletingConversationId] = useState<string>();
   const [previewDocument, setPreviewDocument] = useState<KnowledgeDocumentContent>();
   const [auditOpen, setAuditOpen] = useState(false);
   const [auditRecord, setAuditRecord] = useState<AgentRunAudit>();
@@ -237,6 +238,29 @@ export function App() {
       setMessages([]);
     } catch {
       message.error("创建会话失败。");
+    }
+  }
+
+  async function deleteConversation(conversation: Conversation) {
+    if (streaming) return;
+    setDeletingConversationId(conversation.id);
+    try {
+      await api.deleteConversation(conversation.id);
+      const remaining = conversations.filter((item) => item.id !== conversation.id);
+      setConversations(remaining);
+      if (activeConversationId === conversation.id) {
+        const nextConversationId = remaining[0]?.id;
+        setActiveConversationId(nextConversationId);
+        setMessages([]);
+        setMemoryCandidates([]);
+        setAuditOpen(false);
+        setAuditRecord(undefined);
+      }
+      message.success("会话、消息和本次会话的运行审计已删除。");
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : "删除会话失败。");
+    } finally {
+      setDeletingConversationId(undefined);
     }
   }
 
@@ -558,6 +582,31 @@ export function App() {
             <List.Item
               className={`conversation-item ${item.id === activeConversationId ? "active" : ""}`}
               onClick={() => setActiveConversationId(item.id)}
+              actions={[
+                <Popconfirm
+                  key="delete-conversation"
+                  title="删除此会话？"
+                  description="会删除消息、会话条件、待确认记忆候选和运行审计，无法恢复。已确认的长期记忆不会删除。"
+                  okText="删除"
+                  cancelText="取消"
+                  okButtonProps={{ danger: true, loading: deletingConversationId === item.id }}
+                  disabled={streaming}
+                  onConfirm={() => void deleteConversation(item)}
+                >
+                  <Tooltip title={streaming ? "生成回答期间不能删除会话" : "删除会话"}>
+                    <Button
+                      type="text"
+                      danger
+                      size="small"
+                      shape="circle"
+                      icon={<DeleteOutlined />}
+                      aria-label="删除会话"
+                      disabled={streaming}
+                      onClick={(event) => event.stopPropagation()}
+                    />
+                  </Tooltip>
+                </Popconfirm>,
+              ]}
             >
               <MessageOutlined />
               <Typography.Text ellipsis>{item.title}</Typography.Text>

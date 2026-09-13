@@ -22,6 +22,8 @@ body { margin: 0; min-width: 1080px; }
 .sider-label { display: block; margin: 28px 0 8px; font-size: 12px; }
 .knowledge-button { margin-top: 10px; }
 .conversation-item { gap: 10px; border-radius: 8px; padding: 10px !important; cursor: pointer; border-block-end: 0 !important; }
+.conversation-item .ant-typography { flex: 1; min-width: 0; }
+.conversation-item .ant-list-item-action { margin-inline-start: 0; }
 .conversation-item.active { background: #eff6ff; color: #1d4ed8; }
 .workspace { display: flex; flex-direction: column; min-width: 0; min-height: 0; height: 100vh; }
 .workspace-header { display: flex; justify-content: space-between; align-items: center; padding: 20px 32px; background: #fff; border-bottom: 1px solid #edf0f5; }

@@ -100,6 +100,17 @@ export const api = {
     }),
   listMessages: (conversationId: string) =>
     request<Message[]>(`/api/conversations/${conversationId}/messages`),
+  async deleteConversation(conversationId: string): Promise<void> {
+    const response = await fetch(`${API_URL}/api/conversations/${conversationId}`, {
+      method: "DELETE",
+      headers: buildHeaders(),
+    });
+    handleUnauthorized(response.status);
+    if (!response.ok) {
+      const payload = (await response.json().catch(() => null)) as { detail?: string } | null;
+      throw new Error(payload?.detail ?? `删除会话失败：${response.status}`);
+    }
+  },
   async resetConversationContext(conversationId: string): Promise<void> {
     const response = await fetch(`${API_URL}/api/conversations/${conversationId}/context`, {
       method: "DELETE",

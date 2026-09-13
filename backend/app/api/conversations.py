@@ -5,13 +5,21 @@ from time import perf_counter
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
-from sqlalchemy import select
+from sqlalchemy import delete, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent.operation_agent import OperationAgent
 from app.agent.execution_plan import build_execution_plan_for_mode
 from app.database import get_session
-from app.models import AgentRun, Conversation, ConversationContext, Message, ToolCall, User
+from app.models import (
+    AgentRun,
+    Conversation,
+    ConversationContext,
+    Message,
+    ToolCall,
+    User,
+    UserMemoryCandidate,
+)
 from app.schemas.conversation import (
     AgentRunAuditRead,
     ConversationCreate,
@@ -74,6 +82,45 @@ async def list_messages(
         select(Message).where(Message.conversation_id == conversation_id).order_by(Message.created_at)
     )
     return list(result)
+
+
+@router.delete("/{conversation_id}", status_code=204)
+async def delete_conversation(
+    conversation_id: str,
+    session: AsyncSession = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+) -> None:
+    """删除当前用户的无效会话及其从属消息、上下文和运行审计。"""
+    await _get_conversation(conversation_id, current_user.id, session)
+    running_run = await session.scalar(
+        select(AgentRun.id)
+        .where(AgentRun.conversation_id == conversation_id, AgentRun.status == "running")
+        .limit(1)
+    )
+    if running_run is not None:
+        raise HTTPException(status_code=409, detail="会话正在生成回答，完成后再删除")
+
+    message_ids = select(Message.id).where(Message.conversation_id == conversation_id)
+    run_ids = select(AgentRun.id).where(AgentRun.conversation_id == conversation_id)
+    # 部分早期外键不具备级联删除，因此在受同一事务保护下按依赖逆序清理。
+    await session.execute(
+        delete(ToolCall).where(or_(ToolCall.message_id.in_(message_ids), ToolCall.run_id.in_(run_ids)))
+    )
+    # 待确认候选只属于原会话；已确认的长期记忆位于 user_memories，不能被会话删除影响。
+    await session.execute(
+        delete(UserMemoryCandidate).where(UserMemoryCandidate.conversation_id == conversation_id)
+    )
+    await session.execute(delete(AgentRun).where(AgentRun.conversation_id == conversation_id))
+    await session.execute(delete(Message).where(Message.conversation_id == conversation_id))
+    await session.execute(
+        delete(ConversationContext).where(ConversationContext.conversation_id == conversation_id)
+    )
+    await session.execute(
+        delete(Conversation).where(
+            Conversation.id == conversation_id, Conversation.user_id == current_user.id
+        )
+    )
+    await session.commit()
 
 
 @router.delete("/{conversation_id}/context", status_code=204)
