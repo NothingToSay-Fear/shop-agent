@@ -51,7 +51,7 @@ SQL 模板存储在表中以便维护指标口径，但执行前必须与后端�
 
 ## 1.2 知识库 RAG 查询流程
 
-上传的 PDF、DOCX、Markdown、TXT 文件归入 `private` 或 `team` 资料空间。私有资料仅上传者可见且默认加入其问答检索；团队资料由管理员上传和删除，所有已登录用户可见但默认不参与任何人的问答。解析后按约 800 字符切块（保留 120 字符重叠）；PDF 片段同时记录页码。原始文件持久化在宿主机 `uploads/`，解析正文、pgvector 向量和中文分词词项存入 PostgreSQL。
+上传的 PDF、DOCX、Markdown、TXT 文件归入 `private` 或 `team` 资料空间。私有资料仅上传者可见且默认加入其问答检索；团队资料由管理员上传和删除，所有已登录用户可见但默认不参与任何人的问答。解析器优先按 Markdown/DOCX 章节、段落、列表和表格分块；PDF 保留页码范围。片段以约 500～700 字符为目标、900 字符为上限，只有硬切超长内容时保留约 100 字符重叠。后台 Worker 还会利用同一份本地嵌入模型识别相邻结构块的主题跳变。原始文件持久化在宿主机 `uploads/`，解析正文、标题路径、内容类型、页码范围、pgvector 向量和中文分词词项存入 PostgreSQL。
 
 ```text
 上传文件 + 资料空间
@@ -76,7 +76,7 @@ SQL 模板存储在表中以便维护指标口径，但执行前必须与后端�
 
 知识库检索的完整阶段为：保留原始问题 → 可选的最多 2 条 Query 改写 → 每条 Query 在 PostgreSQL 中执行 pgvector HNSW 向量候选召回与 GIN 中文分词全文候选召回（各 Top-40）→ 服务端 RRF（`k=60`）融合并按 `knowledge_chunk.id` 去重 → 仅加载最多 30 个候选完整文本进入本地 CrossEncoder 精排 → 过滤分数低于 `0.35` 的片段 → 返回 Top-4 片段。候选 SQL 始终同时限制当前用户、资料勾选状态和资料空间，不能绕过私有资料边界。改写仅影响“找什么资料”，不会改变原始问题或受控指标 SQL 的日期参数；LLM 未配置、改写失败或输出非 JSON 时仅使用原问题。`0.35` 是当前 `BAAI/bge-reranker-base` 的保守初值，应随真实标注评测集的分数分布调整；精排模型未挂载、加载失败时不阻断问答，保留 RRF 排序作为确定性降级。
 
-本地模型未就绪时，文件仍会保存为 `pending_embedding`，不会参与知识库检索。模型下载完成后执行 `python -m app.reindex_embeddings`，可同时重建指标定义和知识库片段向量。删除资料时，数据库以外键级联删除 `knowledge_chunks`（含向量），随后删除 `uploads/` 中的原文件。
+本地模型未就绪时，文件仍会保存为 `pending_embedding`，不会参与知识库检索。模型下载完成后执行 `python -m app.reindex_embeddings`，可同时重建指标定义向量，并从原始资料重新解析标题、段落、列表、表格和页码范围后重建知识库片段、向量与词面索引。删除资料时，数据库以外键级联删除 `knowledge_chunks`（含向量），随后删除 `uploads/` 中的原文件。
 
 资料入库不在上传请求内执行。API 接收文件后，在同一数据库事务中创建 `knowledge_documents` 和 `knowledge_index_jobs`，随后返回 `202 Accepted`；`knowledge-worker` 使用 PostgreSQL 行锁（`FOR UPDATE SKIP LOCKED`）领取任务，支持多个 Worker 并行而不重复处理。任务依次记录 `queued`、`parsing`、`embedding`、`completed` 或 `failed` 状态及已处理片段数；Worker 重启时会将遗留 `running` 任务重新入队。向量按默认 32 个片段一批持久化，文档处于 `processing` 时不参与检索；删除文档后，Worker 在每批提交前检测其状态，避免继续写入已删除资料。临时错误最多重试 3 次并指数退避，解析错误等不可恢复错误直接标记失败。
 
@@ -93,6 +93,7 @@ SQL 模板存储在表中以便维护指标口径，但执行前必须与后端�
 | `KNOWLEDGE_RERANKER_MIN_SCORE` | 可选 | 知识库精排最低相关度，默认 `0.35`；仅在精排模型正常评分时生效 |
 | `RAG_QUERY_EXPANSION_MAX_QUERIES` | 可选 | LLM 检索改写数量，默认 `2`；设为 `0` 时禁用改写 |
 | `KNOWLEDGE_INDEX_BATCH_SIZE` | 可选 | Worker 每批向量化的片段数，默认 `32` |
+| `KNOWLEDGE_CHUNK_SEMANTIC_SIMILARITY_THRESHOLD` | 可选 | 相邻结构块语义相似度低于该值、且当前片段已达 300 字符时提前切分，默认 `0.55`；嵌入模型不可用时跳过该辅助判断 |
 | `KNOWLEDGE_INDEX_POLL_SECONDS` | 可选 | Worker 空闲轮询任务间隔，默认 `1` 秒 |
 | `KNOWLEDGE_INDEX_MAX_ATTEMPTS` | 可选 | 索引任务最大尝试次数，默认 `3` |
 
@@ -208,7 +209,7 @@ OperationAgent（流式输出）
 | `daily_metrics` | 覆盖 2026 全年的按日期、商品和渠道汇总的模拟经营指标，另含活动专项渠道数据 |
 | `metric_definitions` | 指标名称、描述、别名、依赖、受控模板、公式和 RAG 向量缓存 |
 | `knowledge_documents` | 原始文件元信息、资料空间、解析正文、处理状态和片段数 |
-| `knowledge_chunks` | 文件片段、PDF 页码、pgvector 向量、中文分词词项与所用模型标识 |
+| `knowledge_chunks` | 文件片段、标题路径、内容类型、PDF 页码范围、pgvector 向量、中文分词词项与所用模型标识 |
 
 ### 4.1 本地账号认证与数据隔离
 
@@ -330,7 +331,7 @@ API 容器启动时会先执行数据库迁移，再运行 `python -m app.seed`�
 
 如需重新生成测试业务数据，可在人工确认后执行 `docker compose exec api python -m app.seed --reset-business-data`。该命令会永久删除 `products` 和 `daily_metrics` 中的全部记录，再写入上述 2026 年模拟商品和指标；不会删除账号、会话、记忆、指标定义或知识库文件，不能用于保留真实业务数据的环境。知识库原始文件保存在 `uploads/` 挂载目录，重建 API 容器不会丢失；不要随意删除该目录。
 
-本地语义向量与精排模型不随镜像或 Git 仓库提交。首次使用依次执行 `docker compose build api knowledge-worker model-download`、`docker compose run --rm model-download`、`docker compose up -d api knowledge-worker` 和 `docker compose exec api python -m app.reindex_embeddings`。下载工具会将嵌入模型保存到 `models/bge-small-zh-v1.5`、精排模型保存到 `models/bge-reranker-base`，随后均以只读卷挂载给 API 与 Worker；下载完成后重建指标定义和知识库片段向量。需要暂时跳过精排模型时可执行 `docker compose run --rm model-download python -m app.download_embedding_model --skip-reranker`。API 运行期间不会下载模型或调用外部嵌入 API。
+本地语义向量与精排模型不随镜像或 Git 仓库提交。首次使用依次执行 `docker compose build api knowledge-worker model-download`、`docker compose run --rm model-download`、`docker compose up -d api knowledge-worker` 和 `docker compose exec api python -m app.reindex_embeddings`。下载工具会将嵌入模型保存到 `models/bge-small-zh-v1.5`、精排模型保存到 `models/bge-reranker-base`，随后均以只读卷挂载给 API 与 Worker；下载完成后重建指标定义，并从原始文件重新解析结构化知识库片段、向量和词面索引。需要暂时跳过精排模型时可执行 `docker compose run --rm model-download python -m app.download_embedding_model --skip-reranker`。API 运行期间不会下载模型或调用外部嵌入 API。
 
 镜像为 CPU 推理预装 PyTorch CPU 轮子，不会安装 CUDA 运行库；如后续需要 GPU 推理，应单独提供 GPU 镜像与 `LOCAL_EMBEDDING_DEVICE` 配置，而不是在默认镜像中混入 CUDA 依赖。
 

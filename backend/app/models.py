@@ -218,8 +218,12 @@ class KnowledgeChunk(Base):
     )
     chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
-    page_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # 页码范围与标题路径来自结构化切分，便于资料引用和后续元数据过滤。
+    page_start: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    page_end: Mapped[int | None] = mapped_column(Integer, nullable=True)
     heading: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    heading_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    content_type: Mapped[str] = mapped_column(String(20), nullable=False, default="paragraph")
     # 使用 pgvector 的 HNSW 索引列执行线上语义候选召回。
     embedding_vector: Mapped[list[float] | None] = mapped_column(Vector(512), nullable=True)
     # 由 jieba 分词后的标题、层级和正文词项，用于 PostgreSQL 全文候选召回。

@@ -12,9 +12,12 @@ from sqlalchemy import delete, select, update
 from app.config import Settings, get_settings
 from app.database import SessionLocal
 from app.models import KnowledgeChunk, KnowledgeDocument, KnowledgeIndexJob
-from app.services.document_parser import parse_document
+from app.services.document_parser import apply_semantic_boundaries, parse_document
 from app.services.local_embeddings import embed_texts
-from app.services.knowledge_search import build_knowledge_search_terms
+from app.services.knowledge_search import (
+    build_knowledge_retrieval_text,
+    build_knowledge_search_terms,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -82,11 +85,28 @@ async def process_index_job(job_id: str, settings: Settings | None = None) -> No
             return
         raw_content = await asyncio.to_thread(Path(document.file_path).read_bytes)
         parsed = await asyncio.to_thread(parse_document, document.original_filename, raw_content)
+        parsed = await apply_semantic_boundaries(
+            parsed,
+            active_settings.knowledge_chunk_semantic_similarity_threshold,
+            lambda texts: embed_texts(texts, active_settings),
+            active_settings.knowledge_index_batch_size,
+        )
         if not await _set_total_chunks(job_id, len(parsed.chunks)):
             return
         for offset in range(0, len(parsed.chunks), active_settings.knowledge_index_batch_size):
             batch = parsed.chunks[offset : offset + active_settings.knowledge_index_batch_size]
-            embeddings = await embed_texts([chunk.content for chunk in batch], active_settings)
+            embeddings = await embed_texts(
+                [
+                    build_knowledge_retrieval_text(
+                        document.title,
+                        chunk.heading_path,
+                        chunk.content_type,
+                        chunk.content,
+                    )
+                    for chunk in batch
+                ],
+                active_settings,
+            )
             if embeddings is None:
                 raise RuntimeError("本地嵌入模型不可用")
             if not await _persist_chunk_batch(job_id, offset, batch, embeddings, active_settings):
@@ -131,12 +151,18 @@ async def _persist_chunk_batch(
                 document_id=document.id,
                 chunk_index=offset + index,
                 content=chunk.content,
-                page_number=chunk.page_number,
+                page_start=chunk.page_start,
+                page_end=chunk.page_end,
                 heading=chunk.heading,
+                heading_path=chunk.heading_path,
+                content_type=chunk.content_type,
                 # 新资料写入 pgvector 列，后续问答可直接使用 HNSW 候选召回。
                 embedding_vector=embedding,
                 search_terms=build_knowledge_search_terms(
-                    document.title, chunk.heading, chunk.content
+                    document.title,
+                    chunk.heading_path,
+                    chunk.content_type,
+                    chunk.content,
                 ),
                 embedding_model=settings.local_embedding_model_id,
             )

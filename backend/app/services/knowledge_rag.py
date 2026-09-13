@@ -2,17 +2,24 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Sequence
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings, get_settings
 from app.models import KnowledgeChunk, KnowledgeDocument, UserKnowledgeDocumentSetting
+from app.services.document_parser import apply_semantic_boundaries, parse_document
 from app.services.hybrid_retrieval import FusedCandidate, reciprocal_rank_fusion, tokenize_for_bm25
-from app.services.knowledge_search import build_knowledge_search_terms
+from app.services.knowledge_search import (
+    build_knowledge_retrieval_text,
+    build_knowledge_search_terms,
+)
 from app.services.local_embeddings import embed_texts
 from app.services.local_reranker import rerank_texts
 from app.services.query_expansion import (
@@ -26,6 +33,7 @@ SPARSE_CANDIDATE_LIMIT = 40
 RERANK_CANDIDATE_LIMIT = 30
 FINAL_KNOWLEDGE_CHUNK_LIMIT = 4
 _TSQUERY_TOKEN = re.compile(r"^[\w\u4e00-\u9fff]+$", re.UNICODE)
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -76,9 +84,10 @@ async def query_knowledge_for_question(
     references: list[str] = []
     reference_ids: list[str] = []
     for chunk, document in selected:
-        location = f"第 {chunk.page_number} 页" if chunk.page_number else f"片段 {chunk.chunk_index + 1}"
-        text_parts.append(f"【{document.title}｜{location}】\n{chunk.content}")
-        reference = f"{document.title}（{location}）"
+        location = _format_chunk_location(chunk)
+        heading_context = f"｜{chunk.heading_path}" if chunk.heading_path else ""
+        text_parts.append(f"【{document.title}{heading_context}｜{location}】\n{chunk.content}")
+        reference = f"{document.title}{heading_context}（{location}）"
         if reference not in references:
             references.append(reference)
         reference_id = f"knowledge_chunk:{chunk.id}"
@@ -184,7 +193,21 @@ async def _load_candidate_rows(
 
 def _knowledge_retrieval_text(chunk: KnowledgeChunk, document: KnowledgeDocument) -> str:
     """精排仍使用标题、标题层级和正文，保持召回与精排的业务语义一致。"""
-    return "\n".join(part for part in (document.title, chunk.heading, chunk.content) if part)
+    return build_knowledge_retrieval_text(
+        document.title,
+        getattr(chunk, "heading_path", None) or chunk.heading,
+        getattr(chunk, "content_type", "paragraph"),
+        chunk.content,
+    )
+
+
+def _format_chunk_location(chunk: KnowledgeChunk) -> str:
+    """优先显示结构化页码范围，非 PDF 资料则回退到稳定片段序号。"""
+    if chunk.page_start is not None:
+        if chunk.page_end is not None and chunk.page_end != chunk.page_start:
+            return f"第 {chunk.page_start}-{chunk.page_end} 页"
+        return f"第 {chunk.page_start} 页"
+    return f"片段 {chunk.chunk_index + 1}"
 
 
 async def _rerank_candidates(
@@ -221,37 +244,73 @@ async def _rerank_candidates(
 
 
 async def reindex_knowledge_chunks(session: AsyncSession) -> int:
-    """批量回填 pgvector 向量与词面索引词项，供存量资料切换新召回链路。"""
+    """按当前解析规则重建存量资料的结构、向量与词面索引。"""
     settings = get_settings()
-    rows = list(
-        (
-            await session.execute(
-                select(KnowledgeChunk, KnowledgeDocument)
-                .join(KnowledgeDocument, KnowledgeChunk.document_id == KnowledgeDocument.id)
-                .order_by(KnowledgeChunk.document_id, KnowledgeChunk.chunk_index)
-            )
-        ).all()
+    documents = list(
+        await session.scalars(
+            select(KnowledgeDocument)
+            .where(KnowledgeDocument.status == "ready")
+            .order_by(KnowledgeDocument.created_at)
+        )
     )
-    embeddings = await embed_texts([chunk.content for chunk, _ in rows], settings)
-    if embeddings is None:
-        return 0
-    for (chunk, document), embedding in zip(rows, embeddings, strict=True):
-        chunk.embedding_vector = embedding
-        chunk.search_terms = build_knowledge_search_terms(
-            document.title, chunk.heading, chunk.content
-        )
-        chunk.embedding_model = settings.local_embedding_model_id
-    document_ids = {chunk.document_id for chunk, _ in rows}
-    if document_ids:
-        documents = list(
-            (
-                await session.scalars(
-                    select(KnowledgeDocument).where(KnowledgeDocument.id.in_(document_ids))
+    rebuilt_chunks = 0
+    for document in documents:
+        try:
+            raw_content = await asyncio.to_thread(Path(document.file_path).read_bytes)
+            parsed = await asyncio.to_thread(
+                parse_document, document.original_filename, raw_content
+            )
+            parsed = await apply_semantic_boundaries(
+                parsed,
+                settings.knowledge_chunk_semantic_similarity_threshold,
+                lambda texts: embed_texts(texts, settings),
+                settings.knowledge_index_batch_size,
+            )
+            embeddings = await embed_texts(
+                [
+                    build_knowledge_retrieval_text(
+                        document.title,
+                        chunk.heading_path,
+                        chunk.content_type,
+                        chunk.content,
+                    )
+                    for chunk in parsed.chunks
+                ],
+                settings,
+            )
+            if embeddings is None:
+                raise RuntimeError("本地嵌入模型不可用")
+            await session.execute(
+                delete(KnowledgeChunk).where(KnowledgeChunk.document_id == document.id)
+            )
+            session.add_all(
+                KnowledgeChunk(
+                    document_id=document.id,
+                    chunk_index=index,
+                    content=chunk.content,
+                    page_start=chunk.page_start,
+                    page_end=chunk.page_end,
+                    heading=chunk.heading,
+                    heading_path=chunk.heading_path,
+                    content_type=chunk.content_type,
+                    embedding_vector=embedding,
+                    search_terms=build_knowledge_search_terms(
+                        document.title,
+                        chunk.heading_path,
+                        chunk.content_type,
+                        chunk.content,
+                    ),
+                    embedding_model=settings.local_embedding_model_id,
                 )
-            ).all()
-        )
-        for document in documents:
-            document.status = "ready"
+                for index, (chunk, embedding) in enumerate(
+                    zip(parsed.chunks, embeddings, strict=True)
+                )
+            )
+            document.content = parsed.content
+            document.chunk_count = len(parsed.chunks)
             document.error_message = None
+            rebuilt_chunks += len(parsed.chunks)
+        except Exception:
+            logger.exception("knowledge_chunk_reindex_failed document_id=%s", document.id)
     await session.commit()
-    return len(rows)
+    return rebuilt_chunks

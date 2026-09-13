@@ -9,7 +9,7 @@ from app.services.knowledge_search import build_knowledge_search_terms
 def test_search_terms_include_document_metadata_and_content() -> None:
     """标题和层级词应进入词面索引，避免仅正文参与召回而漏掉活动名称。"""
     terms = build_knowledge_search_terms(
-        "618 夏日焕新活动规则", "优惠玩法", "店铺券满 199 元减 20 元"
+        "618 夏日焕新活动规则", "优惠玩法 > 店铺券", "paragraph", "店铺券满 199 元减 20 元"
     )
 
     assert "618" in terms
