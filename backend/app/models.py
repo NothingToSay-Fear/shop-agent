@@ -3,6 +3,7 @@ from datetime import date, datetime
 from decimal import Decimal
 
 from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, JSON, Numeric, String, Text, func
+from pgvector.sqlalchemy import Vector
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -219,7 +220,10 @@ class KnowledgeChunk(Base):
     content: Mapped[str] = mapped_column(Text, nullable=False)
     page_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
     heading: Mapped[str | None] = mapped_column(String(300), nullable=True)
-    embedding: Mapped[list[float] | None] = mapped_column(JSON, nullable=True)
+    # 使用 pgvector 的 HNSW 索引列执行线上语义候选召回。
+    embedding_vector: Mapped[list[float] | None] = mapped_column(Vector(512), nullable=True)
+    # 由 jieba 分词后的标题、层级和正文词项，用于 PostgreSQL 全文候选召回。
+    search_terms: Mapped[str | None] = mapped_column(Text, nullable=True)
     embedding_model: Mapped[str | None] = mapped_column(String(100), nullable=True)
 
 

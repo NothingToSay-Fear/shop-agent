@@ -14,6 +14,7 @@ from app.database import SessionLocal
 from app.models import KnowledgeChunk, KnowledgeDocument, KnowledgeIndexJob
 from app.services.document_parser import parse_document
 from app.services.local_embeddings import embed_texts
+from app.services.knowledge_search import build_knowledge_search_terms
 
 logger = logging.getLogger(__name__)
 
@@ -132,7 +133,11 @@ async def _persist_chunk_batch(
                 content=chunk.content,
                 page_number=chunk.page_number,
                 heading=chunk.heading,
-                embedding=embedding,
+                # 新资料写入 pgvector 列，后续问答可直接使用 HNSW 候选召回。
+                embedding_vector=embedding,
+                search_terms=build_knowledge_search_terms(
+                    document.title, chunk.heading, chunk.content
+                ),
                 embedding_model=settings.local_embedding_model_id,
             )
             for index, (chunk, embedding) in enumerate(zip(chunks, embeddings, strict=True))

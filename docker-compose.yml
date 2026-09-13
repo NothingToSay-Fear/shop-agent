@@ -1,6 +1,7 @@
 services:
   db:
-    image: postgres:16-alpine
+    # pgvector 让 PostgreSQL 能用 HNSW 索引完成知识库向量候选召回。
+    image: pgvector/pgvector:pg16
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-shop_agent}
       POSTGRES_USER: ${POSTGRES_USER:-shop_agent}
