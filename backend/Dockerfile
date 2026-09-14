@@ -12,6 +12,7 @@ RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu 
     && pip install --no-cache-dir -r requirements.txt
 
 COPY app ./app
+COPY evaluation ./evaluation
 COPY alembic.ini .
 COPY migrations ./migrations
 

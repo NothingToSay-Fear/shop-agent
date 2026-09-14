@@ -1,0 +1,18 @@
+{
+  "version": "v1",
+  "documents": [
+    "618_activity_rules.md",
+    "qixi_campaign_plan.md",
+    "spring_campaign_review.md",
+    "after_sales_manual.md"
+  ],
+  "quality_gates": {
+    "route_accuracy": 0.7,
+    "plan_accuracy": 0.7,
+    "metric_selection_recall": 0.8,
+    "knowledge_fused_recall_at_40": 0.9,
+    "knowledge_final_recall_at_4": 0.8,
+    "knowledge_empty_accuracy": 1.0,
+    "answer_forbidden_claim_free": 1.0
+  }
+}

@@ -15,3 +15,4 @@ models/*
 !models/.gitkeep
 uploads/*
 !uploads/.gitkeep
+evaluation-reports/

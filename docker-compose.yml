@@ -115,5 +115,47 @@ services:
       - ./models:/models
     command: ["python", "-m", "app.download_embedding_model"]
 
+  evaluation-db:
+    # 评测库与业务库完全隔离，允许评测脚本反复重建固定语料而不影响用户数据。
+    image: pgvector/pgvector:pg16
+    profiles: ["evaluation"]
+    environment:
+      POSTGRES_DB: shop_agent_evaluation
+      POSTGRES_USER: shop_agent
+      POSTGRES_PASSWORD: change-me
+    volumes:
+      - evaluation_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  evaluation:
+    # 真实评测使用同一后端镜像、解析器、pgvector HNSW、GIN、RRF 与精排模型。
+    build:
+      context: ./backend
+    profiles: ["evaluation"]
+    environment:
+      DATABASE_URL: postgresql+asyncpg://shop_agent:change-me@evaluation-db:5432/shop_agent_evaluation
+      LOCAL_EMBEDDING_MODEL_PATH: /models/bge-small-zh-v1.5
+      LOCAL_EMBEDDING_MODEL_ID: ${LOCAL_EMBEDDING_MODEL_ID:-BAAI/bge-small-zh-v1.5}
+      LOCAL_EMBEDDING_DEVICE: ${LOCAL_EMBEDDING_DEVICE:-cpu}
+      LOCAL_RERANKER_MODEL_PATH: /models/bge-reranker-base
+      LOCAL_RERANKER_MODEL_ID: ${LOCAL_RERANKER_MODEL_ID:-BAAI/bge-reranker-base}
+      LOCAL_RERANKER_DEVICE: ${LOCAL_RERANKER_DEVICE:-cpu}
+      KNOWLEDGE_RERANKER_MIN_SCORE: ${KNOWLEDGE_RERANKER_MIN_SCORE:-0.35}
+      RAG_QUERY_EXPANSION_MAX_QUERIES: 0
+    depends_on:
+      evaluation-db:
+        condition: service_healthy
+    volumes:
+      - ./models:/models:ro
+      # 仅 --write-baseline 会改写该版本化数据集中的 baseline.json。
+      - ./backend/evaluation:/app/evaluation
+      - ./evaluation-reports:/reports
+    command: ["sh", "-c", "alembic upgrade head && python -m app.evaluate_rag --prepare --output-dir /reports"]
+
 volumes:
   postgres_data:
+  evaluation_postgres_data:

@@ -295,7 +295,30 @@ cd backend
 python -m pytest tests/test_evaluation_suite.py -q
 ```
 
-该评估验证受控编排的回归，不把固定替身误当作真实检索质量评测。指标召回、知识库 Top-K 和 Tavily 请求分别继续由其单元测试覆盖；后续如更换嵌入模型或调整检索阈值，应增加带人工标注答案的真实索引评测。
+该评估验证受控编排的回归，不把固定替身误当作真实检索质量评测。指标召回、知识库 Top-K 和 Tavily 请求分别继续由其单元测试覆盖。
+
+### 4.4 真实 RAG 评测与质量门禁
+
+`backend/evaluation/datasets/v1/` 是版本化评测集：固定运营资料位于 `documents/`，指标、知识库、综合、多查询单元、多轮继承和无答案样例以 JSONL 保存。知识依据使用“源文件 + 标题/关键文本锚点”标注，而不是易因重切分变化的 Chunk ID。
+
+`app.evaluate_rag` 会在隔离评测库中创建专用评测用户、写入固定资料并使用生产同一套解析、结构化切分、嵌入、pgvector HNSW、GIN + `ts_rank_cd`、RRF、CrossEncoder、受控 SQL 和 `AgentWorkflow` 执行样例。评测过程不连接 Tavily、不需要 LLM 改写；多 Query 改写在评测中固定关闭，以消除外部模型随机性。每一条样例保留向量候选、全文候选、RRF 候选和最终精排结果对应的来源文件，便于定位召回在哪一层退化。
+
+报告输出以下指标：路由准确率、工具计划准确率、指标选择命中率、向量/全文/RRF 的 Recall@40、精排后的 Recall@4、MRR、nDCG@4、Precision@4、无答案准确率、回答关键事实覆盖率、禁止事实未出现率及端到端 P95 时延。Markdown 报告会在每个数值旁展示中文名称、英文术语、计算含义与“越高/越低越好”的判断方向；JSON 报告同步提供 `metric_definitions`，便于前端或脚本读取。`manifest.json` 定义最低门槛；人工验收某次结果后可使用 `--write-baseline` 写入 `baseline.json`，后续运行若任一已记录指标下降超过 3 个百分点即失败。
+
+```powershell
+# 需要已下载本地嵌入和精排模型；只启动隔离评测数据库和一次性评测容器。
+docker compose --profile evaluation run --rm evaluation
+
+# 人工核验首份报告后，明确将该次结果写为版本化基线。
+docker compose --profile evaluation run --rm evaluation sh -c "alembic upgrade head && python -m app.evaluate_rag --prepare --write-baseline --output-dir /reports"
+```
+
+报告写入根目录 `evaluation-reports/`，该目录被 Git 忽略。`evaluation-db` 使用独立数据卷，评测脚本仅允许数据库连接串包含 `evaluation` 时执行 `--prepare`；若需要在其他隔离环境写入，必须显式设置 `EVALUATION_ALLOW_DATABASE_WRITE=true`。常规单元回归仍执行：
+
+```powershell
+cd backend
+python -m pytest tests/test_evaluation_suite.py tests/test_evaluation_framework.py -q
+```
 
 ## 5. 配置原则
 

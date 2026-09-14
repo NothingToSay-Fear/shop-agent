@@ -45,6 +45,17 @@ class KnowledgeQueryContext:
     reference_ids: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class KnowledgeRetrievalTrace:
+    """供离线评测读取的检索阶段轨迹，不写入线上用户审计记录。"""
+
+    queries: tuple[str, ...]
+    dense_rankings: tuple[tuple[str, ...], ...]
+    sparse_rankings: tuple[tuple[str, ...], ...]
+    fused_ranking: tuple[str, ...]
+    final_ranking: tuple[str, ...]
+
+
 async def query_knowledge_for_question(
     session: AsyncSession,
     question: str,
@@ -117,6 +128,45 @@ async def retrieve_knowledge_candidates(
         if sparse:
             rankings.append(sparse)
     return reciprocal_rank_fusion(rankings)
+
+
+async def trace_knowledge_retrieval(
+    session: AsyncSession,
+    user_id: str,
+    question: str,
+    settings: Settings | None = None,
+) -> KnowledgeRetrievalTrace:
+    """执行与线上一致的候选召回和精排，并暴露各阶段排名用于离线测评。"""
+    active_settings = settings or get_settings()
+    queries = await expand_queries(question, active_settings)
+    embeddings = await embed_expanded_queries(queries, active_settings, None)
+    dense_rankings: list[tuple[str, ...]] = []
+    sparse_rankings: list[tuple[str, ...]] = []
+    fusion_inputs: list[list[str]] = []
+    for query, embedding in zip(queries, embeddings, strict=True):
+        if embedding:
+            dense = await _retrieve_dense_candidate_ids(session, user_id, embedding)
+            dense_rankings.append(tuple(dense))
+            if dense:
+                fusion_inputs.append(dense)
+        else:
+            dense_rankings.append(())
+        sparse = await _retrieve_sparse_candidate_ids(session, user_id, query)
+        sparse_rankings.append(tuple(sparse))
+        if sparse:
+            fusion_inputs.append(sparse)
+    fused = reciprocal_rank_fusion(fusion_inputs)
+    rows = await _load_candidate_rows(
+        session, user_id, [candidate.item_id for candidate in fused[:RERANK_CANDIDATE_LIMIT]]
+    )
+    selected = await _rerank_candidates(question, fused, rows, active_settings)
+    return KnowledgeRetrievalTrace(
+        queries=queries,
+        dense_rankings=tuple(dense_rankings),
+        sparse_rankings=tuple(sparse_rankings),
+        fused_ranking=tuple(candidate.item_id for candidate in fused),
+        final_ranking=tuple(chunk.id for chunk, _ in selected),
+    )
 
 
 def _eligible_chunk_statement(user_id: str):

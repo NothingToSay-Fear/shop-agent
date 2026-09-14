@@ -1,0 +1,4 @@
+{"id":"metric-618-gmv","category":"metric","question":"618 正式期的 GMV 是多少？","expected_route":"metrics","expected_tools":["query_metric_rag"],"expected_metric_codes":["paid_gmv"]}
+{"id":"metric-qixi-orders","category":"metric","question":"七夕礼赠活动期间的支付订单数是多少？","expected_route":"metrics","expected_tools":["query_metric_rag"],"expected_metric_codes":["paid_order_count"]}
+{"id":"metric-multi-unit","category":"metric","question":"对比 618 和七夕活动的 GMV 与支付订单数。","expected_route":"metrics","expected_tools":["query_metric_rag"],"expected_metric_codes":["paid_gmv","paid_order_count"]}
+{"id":"metric-context-followup","category":"metric","context_turns":["七夕活动的 GMV 是多少？"],"question":"再看看订单量。","expected_route":"metrics","expected_tools":["query_metric_rag"],"expected_metric_codes":["paid_order_count"]}
