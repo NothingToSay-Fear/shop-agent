@@ -87,10 +87,21 @@ def test_report_renders_human_readable_metric_definitions() -> None:
         "passed": True,
         "gate_failures": [],
         "baseline_failures": [],
-        "cases": [],
+        "cases": [
+            {
+                "case_id": "routing-failure",
+                "route_ok": False,
+                "plan_ok": False,
+                "metric_ok": True,
+                "evidence_ok": True,
+                "empty_ok": True,
+                "route_decision_reason": "intent_reranker:below_minimum_margin",
+            }
+        ],
     }
 
     markdown = _render_markdown(report)
     assert "路由准确率" in markdown
     assert "问题被正确判断" in markdown
     assert "越低越好" in markdown
+    assert "intent_reranker:below_minimum_margin" in markdown

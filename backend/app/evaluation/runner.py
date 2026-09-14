@@ -145,6 +145,10 @@ class CaseResult:
     category: str
     route: str
     expected_route: str
+    route_confidence: float | None
+    route_fallback_to_hybrid: bool | None
+    route_decision_reason: str | None
+    route_candidate_scores: dict[str, float] | None
     tools: tuple[str, ...]
     expected_tools: tuple[str, ...]
     metric_codes: tuple[str, ...]
@@ -290,7 +294,8 @@ async def _evaluate_case(session, case: EvaluationCase, settings: Settings) -> C
         user_id=EVALUATION_USER_ID,
         conversation_context=context,
     )
-    route = workflow_result.tracker.route.mode if workflow_result.tracker.route else "unknown"
+    route_result = workflow_result.tracker.route
+    route = route_result.mode if route_result else "unknown"
     tools = tuple(call.tool_name for call in workflow_result.tracker.tool_calls)
     metric_codes = workflow_result.tracker.metric_context.metric_codes if workflow_result.tracker.metric_context else ()
 
@@ -333,6 +338,10 @@ async def _evaluate_case(session, case: EvaluationCase, settings: Settings) -> C
         category=case.category,
         route=route,
         expected_route=case.expected_route,
+        route_confidence=route_result.confidence if route_result else None,
+        route_fallback_to_hybrid=route_result.fallback_to_hybrid if route_result else None,
+        route_decision_reason=route_result.decision_reason if route_result else None,
+        route_candidate_scores=route_result.candidate_scores if route_result else None,
         tools=tools,
         expected_tools=case.expected_tools,
         metric_codes=tuple(metric_codes),
@@ -533,7 +542,8 @@ def _render_markdown(report: dict[str, Any]) -> str:
         if not (item["route_ok"] and item["plan_ok"] and item["metric_ok"] and item["evidence_ok"] and item["empty_ok"])
     ]
     failure_rows = "\n".join(
-        f"| {item['case_id']} | 路由={item['route_ok']}；计划={item['plan_ok']}；指标={item['metric_ok']}；依据={item['evidence_ok']} |"
+        f"| {item['case_id']} | 路由={item['route_ok']}；计划={item['plan_ok']}；指标={item['metric_ok']}；依据={item['evidence_ok']}；"
+        f"路由原因={item.get('route_decision_reason') or '-'} |"
         for item in failed_cases
     ) or "| 无 | 全部通过结构化校验 |"
     failures = "\n".join(f"- {item}" for item in [*report["gate_failures"], *report["baseline_failures"]]) or "- 无"

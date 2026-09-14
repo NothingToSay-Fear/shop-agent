@@ -1,4 +1,8 @@
-from app.services.intent_router import choose_retrieval_route
+import pytest
+
+import app.services.intent_router as intent_router
+from app.config import Settings
+from app.services.intent_router import choose_retrieval_route, choose_retrieval_route_with_reason
 
 
 def test_router_selects_metrics_for_a_confident_metric_question() -> None:
@@ -47,3 +51,42 @@ def test_router_selects_web_hybrid_for_a_confident_combined_question() -> None:
     assert mode == "web_hybrid"
     assert confidence == 0.84
     assert fallback is False
+
+
+def test_router_marks_a_real_hybrid_winner_as_non_fallback() -> None:
+    mode, confidence, fallback, reason = choose_retrieval_route_with_reason(
+        {"metrics": 0.33, "knowledge": 0.48, "hybrid": 0.78}
+    )
+
+    assert (mode, confidence, fallback, reason) == ("hybrid", 0.78, False, "hybrid_selected")
+
+
+@pytest.mark.asyncio
+async def test_router_uses_reranker_to_disambiguate_a_close_vector_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_embed(_: list[str], __: Settings) -> list[list[float]]:
+        return [[1.0, 0.0]]
+
+    async def fake_prototypes(_: Settings) -> dict[str, tuple[list[float], ...]]:
+        return {mode: ([1.0, 0.0],) for mode in intent_router.INTENT_PROTOTYPES}
+
+    async def fake_rerank(_: str, __: list[str], ___: Settings) -> list[float]:
+        return [0.12, 0.91, 0.18, 0.04, 0.03]
+
+    monkeypatch.setattr(intent_router, "embed_texts", fake_embed)
+    monkeypatch.setattr(intent_router, "_get_prototype_embeddings", fake_prototypes)
+    monkeypatch.setattr(intent_router, "rerank_texts", fake_rerank)
+
+    route = await intent_router.route_question("618 的发货时效要求是什么？", Settings())
+
+    assert route.mode == "knowledge"
+    assert route.fallback_to_hybrid is False
+    assert route.decision_reason == "intent_reranker:confident_single_route"
+    assert route.candidate_scores == {
+        "metrics": 0.12,
+        "knowledge": 0.91,
+        "hybrid": 0.18,
+        "web": 0.04,
+        "web_hybrid": 0.03,
+    }

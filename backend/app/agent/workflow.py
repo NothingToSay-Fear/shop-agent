@@ -58,7 +58,8 @@ class AgentWorkflow:
         if active_memory_context.items:
             await self._emit_status(on_status, "memory", "正在应用你的长期偏好…")
         await self._emit_status(on_status, "routing", "正在判断问题类型…")
-        route = await self._resolve_route(retrieval_question, retrieval_mode)
+        # 本轮意图只由用户原始表达判断；会话条件仅用于限定后续真实检索，避免旧条件放大综合意图。
+        route = await self._resolve_route(user_input, retrieval_mode)
         tracker.set_route(route)
         plan = build_execution_plan(route)
         prepared_queries = None
@@ -67,7 +68,9 @@ class AgentWorkflow:
             for tool_name in plan.required_tools
         ):
             prepared_queries = await prepare_retrieval_queries(
-                retrieval_question, self.settings, route.query_embedding
+                retrieval_question,
+                self.settings,
+                route.query_embedding if retrieval_question == user_input else None,
             )
         tools = build_agent_tools(tracker, self.settings, user_id, prepared_queries)
         await self._emit_status(on_status, "plan", f"已生成执行计划：{plan.summary}")

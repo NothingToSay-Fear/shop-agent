@@ -313,7 +313,7 @@ docker compose --profile evaluation run --rm evaluation
 docker compose --profile evaluation run --rm evaluation sh -c "alembic upgrade head && python -m app.evaluate_rag --prepare --write-baseline --output-dir /reports"
 ```
 
-报告写入根目录 `evaluation-reports/`，该目录被 Git 忽略。`evaluation-db` 使用独立数据卷，评测脚本仅允许数据库连接串包含 `evaluation` 时执行 `--prepare`；若需要在其他隔离环境写入，必须显式设置 `EVALUATION_ALLOW_DATABASE_WRITE=true`。常规单元回归仍执行：
+报告写入根目录 `evaluation-reports/`，该目录被 Git 忽略。每条样例还会记录路由置信度、是否因低置信度/低分差保护性降级到 `hybrid`、向量或意图精排的判定原因及各候选得分；因此可以区分“确实需要综合检索”和“保守地多查了一路”。`evaluation-db` 使用独立数据卷，评测脚本仅允许数据库连接串包含 `evaluation` 时执行 `--prepare`；若需要在其他隔离环境写入，必须显式设置 `EVALUATION_ALLOW_DATABASE_WRITE=true`。常规单元回归仍执行：
 
 ```powershell
 cd backend
