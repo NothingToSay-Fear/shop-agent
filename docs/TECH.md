@@ -157,7 +157,7 @@ SQL 模板存储在表中以便维护指标口径，但执行前必须与后端�
 
 ### Agent 服务
 
-- `OperationAgent` 只负责调用工作流并将最终文本拆分为 SSE 片段；不直接处理路由、工具调用、模型创建或回答文案。
+- `OperationAgent` 只负责调用正式工作流并将最终文本拆分为 SSE 片段；不提供外部注入检索上下文的旁路，因此不直接处理路由、工具调用、模型创建或回答文案。
 - `AgentWorkflow` 负责意图路由、构造并执行 `ExecutionPlan`、校验工具轨迹和来源，再将已验证上下文交给模型总结；`AnswerGenerator` 负责 DeepAgent/LLM 回答与离线演示回答；`PromptBuilder` 只生成系统提示词与已执行计划约束。
 
 ```text

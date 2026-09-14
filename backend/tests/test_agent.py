@@ -1,64 +1,34 @@
 import pytest
 
 from app.agent.operation_agent import OperationAgent
+from app.agent.tools import AgentToolTracker
+from app.agent.workflow import AgentWorkflow, WorkflowResult
 from app.config import Settings
 
 
 @pytest.mark.asyncio
-async def test_demo_agent_returns_operational_guidance() -> None:
-    agent = OperationAgent(Settings(llm_api_key=None, llm_model=None))
-    context = "数据来源：内置模拟经营数据。GMV 12,000.00 元，GMV 环比 -8.00%。"
-    answer = "".join(
-        [chunk async for chunk in agent.stream("分析本周 GMV 环比下降", context)]
-    )
+async def test_agent_stream_events_forwards_workflow_status_and_answer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """SSE 适配层只转发正式工作流产出的进度与回答，不提供绕过检索的外部上下文入口。"""
 
-    assert "经营数据分析" in answer
-    assert "12,000.00" in answer
-    assert "验证指标" in answer
+    async def fake_answer(
+        _: AgentWorkflow,
+        user_input: str,
+        __: str,
+        on_status,
+        *___: object,
+    ) -> WorkflowResult:
+        assert user_input == "查询本周 GMV"
+        await on_status("routing", "正在判断问题类型…")
+        return WorkflowResult("这是受控工作流的回答。", "指标定义：paid_gmv", AgentToolTracker())
 
-
-@pytest.mark.asyncio
-async def test_demo_agent_does_not_invent_when_knowledge_is_missing() -> None:
-    """知识库检索未命中时，离线回答也必须明确资料不足。"""
-    agent = OperationAgent(Settings(llm_api_key=None, llm_model=None))
-    answer = "".join(
-        [
-            chunk
-            async for chunk in agent.stream(
-                "活动报名条件是什么？",
-                "【知识库资料】\n知识库中未检索到足以回答该问题的资料，请明确说明资料不足。",
-            )
-        ]
-    )
-
-    assert "未检索到" in answer
-
-
-@pytest.mark.asyncio
-async def test_demo_agent_marks_hybrid_context_as_combined_evidence() -> None:
-    """同一问题同时命中数据和资料时，应保留两类依据而非互相覆盖。"""
-    agent = OperationAgent(Settings(llm_api_key=None, llm_model=None))
-    context = "【经营指标】\nGMV 环比 -8%。\n\n【知识库资料】\n历史活动曾使用定向券。"
-    answer = "".join([chunk async for chunk in agent.stream("GMV 下滑怎么办？", context)])
-
-    assert "综合依据" in answer
-    assert "GMV 环比" in answer
-    assert "定向券" in answer
-
-
-@pytest.mark.asyncio
-async def test_agent_stream_events_expose_progress_before_answer_chunks() -> None:
-    """前端应能在回答文本前收到不含原文的执行阶段提示。"""
+    monkeypatch.setattr(AgentWorkflow, "answer", fake_answer)
     agent = OperationAgent(Settings(llm_api_key=None, llm_model=None))
 
-    events = [
-        event
-        async for event in agent.stream_events(
-            "分析本周 GMV 环比下降",
-            "数据来源：内置模拟经营数据。GMV 12,000.00 元，GMV 环比 -8.00%。",
-        )
-    ]
+    events = [event async for event in agent.stream_events("查询本周 GMV")]
 
     assert events[0].event_type == "status"
-    assert events[0].phase == "generation"
-    assert any(event.event_type == "chunk" for event in events)
+    assert events[0].phase == "routing"
+    assert "".join(event.content for event in events if event.event_type == "chunk") == "这是受控工作流的回答。"
+    assert agent.data_references == "指标定义：paid_gmv"

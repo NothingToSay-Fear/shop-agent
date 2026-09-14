@@ -115,13 +115,6 @@ class AgentWorkflow:
             self.answer_generator.generate_demo(user_input, tracker.data_context), tracker.references, tracker
         )
 
-    async def answer_from_context(
-        self, user_input: str, data_context: str | None
-    ) -> WorkflowResult:
-        """兼容测试和旧调用方的直接上下文路径。"""
-        answer = await self.answer_generator.generate_from_context(user_input, data_context)
-        return WorkflowResult(answer, "外部注入上下文（仅用于兼容调用）", AgentToolTracker())
-
     async def _resolve_route(
         self, user_input: str, retrieval_mode: RetrievalMode
     ) -> RetrievalRoute:

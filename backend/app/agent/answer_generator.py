@@ -20,15 +20,6 @@ class AnswerGenerator:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
 
-    async def generate_from_context(self, user_input: str, data_context: str | None) -> str:
-        """兼容测试和旧调用方注入上下文的回答路径。"""
-        if self.settings.llm_enabled:
-            answer = await self.generate_with_llm(user_input, data_context, [])
-            if answer is not None:
-                return answer
-            return self.generate_demo(user_input, data_context, model_error=True)
-        return self.generate_demo(user_input, data_context)
-
     async def generate_with_llm(
         self,
         user_input: str,

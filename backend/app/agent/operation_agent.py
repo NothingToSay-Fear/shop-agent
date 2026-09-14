@@ -32,31 +32,9 @@ class OperationAgent:
         self.data_references = "演示模式：尚未检索到相关数据、资料或公开网页来源"
         self.tool_tracker = AgentToolTracker()
 
-    async def stream(
-        self,
-        user_input: str,
-        data_context: str | None = None,
-        retrieval_mode: RetrievalMode = "hybrid",
-        conversation_context: ConversationContextSnapshot | None = None,
-        user_memory_context: UserMemoryContext | None = None,
-        user_id: str | None = None,
-    ) -> AsyncIterator[str]:
-        """保留旧文本分片接口，供既有调用方和测试继续使用。"""
-        async for event in self.stream_events(
-            user_input,
-            data_context,
-            retrieval_mode,
-            conversation_context,
-            user_memory_context,
-            user_id,
-        ):
-            if event.event_type == "chunk":
-                yield event.content
-
     async def stream_events(
         self,
         user_input: str,
-        data_context: str | None = None,
         retrieval_mode: RetrievalMode = "hybrid",
         conversation_context: ConversationContextSnapshot | None = None,
         user_memory_context: UserMemoryContext | None = None,
@@ -71,18 +49,14 @@ class OperationAgent:
 
         async def execute() -> None:
             try:
-                if data_context is not None:
-                    await publish_status("generation", "正在整理已提供的上下文…")
-                    result = await self.workflow.answer_from_context(user_input, data_context)
-                else:
-                    result = await self.workflow.answer(
-                        user_input,
-                        retrieval_mode,
-                        publish_status,
-                        conversation_context,
-                        user_memory_context,
-                        user_id,
-                    )
+                result = await self.workflow.answer(
+                    user_input,
+                    retrieval_mode,
+                    publish_status,
+                    conversation_context,
+                    user_memory_context,
+                    user_id,
+                )
                 await queue.put(result)
             except Exception as error:
                 await queue.put(error)
