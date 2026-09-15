@@ -314,7 +314,7 @@ async def query_metrics_for_question(
         values_by_unit.append(values)
 
     requested_definitions = [definition_map[code] for code in requested_codes]
-    lines = ["数据来源：内置模拟经营数据。"]
+    lines = ["数据来源：经营数据。"]
     for unit, values in zip(plan.units, values_by_unit, strict=True):
         lines.append(f"【{unit.label}：{unit.start_date} 至 {unit.end_date}】")
         for definition in requested_definitions:

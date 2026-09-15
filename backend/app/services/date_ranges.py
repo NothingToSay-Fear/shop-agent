@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from datetime import date
 
-# 演示经营数据当前覆盖 2026 年。无年份的日期表达按该业务数据年度解释，避免依赖部署机器日期。
+# 开发环境的测试数据当前覆盖 2026 年。无年份的日期表达按数据年度解释，避免依赖部署机器日期。
 DEMO_DATA_YEAR = 2026
 _SEPARATOR = r"(?:至|到|~|-|–|—)"
 _CHINESE_RANGE_PATTERN = re.compile(

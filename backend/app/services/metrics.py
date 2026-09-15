@@ -1,4 +1,4 @@
-"""模拟经营指标的查询与文本摘要。"""
+"""经营指标的查询与文本摘要。"""
 
 from dataclasses import asdict, dataclass
 from datetime import date, timedelta
@@ -49,7 +49,7 @@ class MetricsOverview:
         gmv_change = _change_rate(self.current.gmv, self.previous.gmv)
         visitor_change = _change_rate(self.current.visitors, self.previous.visitors)
         return (
-            f"数据来源：内置模拟经营数据。当前周期：{self.current.start_date} 至 {self.current.end_date}；"
+            f"数据来源：经营数据。当前周期：{self.current.start_date} 至 {self.current.end_date}；"
             f"GMV {self.current.gmv:,.2f} 元，支付订单 {self.current.paid_orders}，"
             f"访客 {self.current.visitors}，支付转化率 {self.current.conversion_rate:.2%}，"
             f"退款订单 {self.current.refund_orders}。\n"
@@ -82,7 +82,7 @@ async def get_metrics_overview(session: AsyncSession) -> MetricsOverview | None:
 async def _aggregate_period(
     session: AsyncSession, start_date: date, end_date: date
 ) -> MetricPeriod:
-    """聚合一个日期区间的模拟经营数据。"""
+    """聚合一个日期区间的经营数据。"""
     result = await session.execute(
         select(
             func.coalesce(func.sum(DailyMetric.paid_gmv), 0),

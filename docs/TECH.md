@@ -15,7 +15,7 @@ FastAPI API 服务
        ├── 指标 RAG 工具 / 知识库 RAG 工具 / 联网搜索工具
        ├── 运营复盘子 Agent（复杂复盘与归因）
        ├── DeepAgent + LangChain + LangGraph（配置模型后）
-       └── 演示模式（未配置模型时）
+       └── 受控证据回退（未配置模型或调用失败时）
         │
         ├── PostgreSQL
         ├── PostgreSQL：会话、业务数据、指标与知识库向量
@@ -41,7 +41,7 @@ FastAPI API 服务
   -> Agent 基于问题和查询结果生成回答
 ```
 
-`metric_definitions` 是指标知识的唯一入口。一条定义包含稳定编码、名称、业务描述、别名、前置指标编码、受控 SQL 模板或受控计算公式、嵌入向量和启用状态。基础指标通过模板查询 `daily_metrics`；如支付转化率、客单价和退款率等派生指标只读取其前置指标的结果后计算。未给出日期且没有可继承会话条件时，系统以 `Asia/Shanghai` 当前日期为上限，从业务数据中选取最近可用日期并向前查询 7 天；未来预置或误入库数据不会成为默认范围。
+`metric_definitions` 是指标知识的唯一入口。一条定义包含稳定编码、名称、业务描述、别名、前置指标编码、受控 SQL 模板或受控计算公式、嵌入向量和启用状态。基础指标通过模板查询 `daily_metrics`；如支付转化率、客单价和退款率等派生指标只读取其前置指标的结果后计算。未给出日期且没有可继承会话条件时，系统以 `Asia/Shanghai` 当前日期为上限，从业务数据中选取最近可用日期并向前查询 7 天；未来日期或误入库数据不会成为默认范围。
 
 SQL 模板存储在表中以便维护指标口径，但执行前必须与后端登记的只读模板完全匹配；参数仅允许 `source`、`start_date`、`end_date` 绑定传入。计算公式同样只允许后端登记的公式，禁止对数据库中的文本使用 `eval` 或让模型输出 SQL。
 
@@ -158,13 +158,13 @@ SQL 模板存储在表中以便维护指标口径，但执行前必须与后端�
 ### Agent 服务
 
 - `OperationAgent` 只负责调用正式工作流并将最终文本拆分为 SSE 片段；不提供外部注入检索上下文的旁路，因此不直接处理路由、工具调用、模型创建或回答文案。
-- `AgentWorkflow` 负责意图路由、构造并执行 `ExecutionPlan`、校验工具轨迹和来源，再将已验证上下文交给模型总结；`AnswerGenerator` 负责 DeepAgent/LLM 回答与离线演示回答；`PromptBuilder` 只生成系统提示词与已执行计划约束。
+- `AgentWorkflow` 负责意图路由、构造并执行 `ExecutionPlan`、校验工具轨迹和来源，再将已验证上下文交给模型总结；`AnswerGenerator` 负责 DeepAgent/LLM 回答与受控证据回退；`PromptBuilder` 只生成系统提示词与已执行计划约束。
 
 ```text
 OperationAgent（流式输出）
   -> AgentWorkflow（路由、执行计划、工具调用、来源校验）
        -> PromptBuilder（系统提示词、已执行计划约束）
-       -> AnswerGenerator（DeepAgent / 演示回答）
+       -> AnswerGenerator（DeepAgent / 受控证据回退）
        -> app/agent/execution_plan.py（计划与校验）
        -> app/agent/tools/（指标、知识库、联网搜索、工具注册表）
 ```
@@ -175,12 +175,12 @@ OperationAgent（流式输出）
 - 前两类工具自行创建短生命周期数据库会话，不向模型暴露连接或任意 SQL；联网工具只调用固定的 Tavily 搜索端点。工具代码按职责位于 `app/agent/tools/`：`metric_rag.py`、`knowledge_rag.py`、`web_search.py` 负责具体检索，`tracker.py` 汇总本轮依据与调用额度，`__init__.py` 仅组合工具供 Agent 使用。
 - 涉及活动复盘、经营归因、效果评估和优化建议时，主 Agent 通过 DeepAgent `task` 委派给 `operation_review_agent`；子 Agent 只拥有同一批受控 RAG 与联网搜索工具。项目同时显式覆盖 DeepAgent 默认的 `general-purpose` 子 Agent，防止框架自动附加更宽的能力。
 - 主 Agent 和两个子 Agent 均把框架文件系统能力限制为只读 `read_file`；不提供文件写入、删除或命令执行工具。
-- 配置 `LLM_API_KEY` 和 `LLM_MODEL` 后使用 DeepAgent 执行 LangChain/LangGraph Agent 流程，但模型只能在系统已完成并校验执行计划后基于受控上下文总结；模型不可用时，主 Agent 使用同一批已执行工具结果进入演示回答。
+- 配置 `LLM_API_KEY` 和 `LLM_MODEL` 后使用 DeepAgent 执行 LangChain/LangGraph Agent 流程，但模型只能在系统已完成并校验执行计划后基于受控上下文总结；模型未配置或调用失败时，主 Agent 不再生成模拟回答，仅返回同轮已验证的工具依据。
 - `ContextBuilder` 在保存用户消息后合并会话中已确认的活动、日期、指标提示和分析目标。当前轮明确条件覆盖旧值；支持清除或重置；未出现的条件可继承；模糊表达不会触发条件猜测。它统一识别中文、ISO 和 `8/16–8/22` 等月/日日期范围；只给路由和检索提供“原问题 + 条件摘要”。
 - 会话中的 `start_date`、`end_date` 不再由指标 RAG 从摘要文本二次解析：工作流将其作为 `date` 类型参数传给 `query_metric_rag`，再由 `MetricQueryConstraints` 绑定到受控 SQL 模板。单一继承范围作为默认单元；本轮明确出现多个活动或多个日期范围时，`MetricQueryPlan` 以本轮多单元范围为准。条件摘要仅用于语义路由与可解释展示。
 - `ConversationSummary` 是同会话短期状态，而非仅保存摘要：它保存压缩讨论摘要、主题/要点/待验证项和有限的最近消息窗口。每轮回答完成后，API 直接将本轮精简窗口写入该状态；它不反查 `messages` 表。状态行以 `FOR UPDATE` 串行化同一会话的追加，首次创建时先锁定会话父行，避免并发请求丢失轮次。状态估算 token 数达到 `CONVERSATION_MEMORY_COMPACT_THRESHOLD` 后创建 `ConversationSummaryJob`；独立 `conversation-summary-worker` 通过 `FOR UPDATE SKIP LOCKED` 领取任务，并绑定租约令牌。Worker 中断后，租约到期的任务会自动重新排队；执行异常按指数退避重试，达到 `CONVERSATION_SUMMARY_MAX_ATTEMPTS` 后才标记失败。模型不可用或返回非 JSON 时采用长度受限的确定性降级摘要，绝不阻塞本轮回答。每轮回答生成均读取短期状态，不依赖历史指代关键词；路由、问题扩展、RAG 候选召回、工具入参和 SQL 仍只使用当前问题与 `ConversationContext` 的结构化条件。`agent_runs` 记录短期状态版本和是否实际采用，压缩状态记录来源消息 ID 与 `run_id`，便于追溯。
 - `ConversationHistoryUnit` 是独立于短期状态的会话内历史 RAG 索引：每个完成的一问一答生成一个长度受限单元，立即写入 jieba 词项，Worker 再异步补齐 pgvector 向量。仅当 `ConversationSummary` 已有压缩摘要时，API 才按当前问题在同一会话内查询 HNSW 向量候选和 GIN 全文候选、RRF 融合并按需 CrossEncoder 精排；没有精排或嵌入模型时分别保留 RRF 或全文召回。命中的最多两条历史单元仅传入生成提示词，不参与路由、查询扩展、工具入参和 SQL；`agent_runs` 只审计其 ID 与采用标记。首期不回填旧会话单元，也不承诺逐字恢复早期原文。
-- 未配置模型时使用演示模式，保证本地开发和 Docker 验收不依赖密钥。
+- 未配置模型时仍可完成受控检索与审计，但只返回已验证依据；没有依据时明确拒绝生成回答。本地开发和 Docker 验收可不依赖模型密钥。
 - 后续通过工具适配器接入商品、订单、流量及推广数据源；数据结论必须带数据范围与查询时间。
 
 ### 模型服务
@@ -193,7 +193,7 @@ OperationAgent（流式输出）
 | `LLM_MODEL` | 启用真实 Agent 时必填 | 服务端支持的模型名称 |
 | `LLM_BASE_URL` | 可选 | 兼容模型服务的 API 地址；未设置时由 SDK 使用其默认地址 |
 
-只有同时配置 `LLM_API_KEY` 和 `LLM_MODEL` 才会调用真实模型；否则进入不依赖密钥的演示模式。
+只有同时配置 `LLM_API_KEY` 和 `LLM_MODEL` 才会调用模型生成结论；否则系统只返回本轮已验证依据，不进行关键词模板生成。
 
 ## 4. 数据模型
 
@@ -210,8 +210,8 @@ OperationAgent（流式输出）
 | `messages` | 用户与 Agent 消息、回答状态及数据引用 |
 | `agent_runs` | 每次 Agent 问答的 `run_id`、脱敏摘要、实际采用的结构化上下文快照、会话条件变化、短期状态版本/采用标记、历史单元 ID/采用标记、路由、状态、总耗时和引用 ID；保留 15 天 |
 | `tool_calls` | 关联 `run_id` 的工具调用摘要、引用 ID、结果、耗时和错误信息；随运行记录级联清理 |
-| `products` | 内置模拟商品资料，后续可替换为真实商品数据源 |
-| `daily_metrics` | 覆盖 2026 全年的按日期、商品和渠道汇总的模拟经营指标，另含活动专项渠道数据 |
+| `products` | 商品资料；生产环境可接入商品主数据或业务系统同步 |
+| `daily_metrics` | 按日期、商品和渠道汇总的经营指标，另可包含活动专项渠道数据 |
 | `metric_definitions` | 指标名称、描述、别名、依赖、受控模板、公式和 RAG 向量缓存 |
 | `knowledge_documents` | 原始文件元信息、资料空间、解析正文、处理状态和片段数 |
 | `knowledge_chunks` | 文件片段、标题路径、内容类型、PDF 页码范围、pgvector 向量、中文分词词项与所用模型标识 |
@@ -284,7 +284,7 @@ status：正在应用本会话已确认的查询条件
 
 ### 4.3 固定 Agent 场景评估
 
-`backend/tests/evaluation_cases.py` 定义数据驱动的离线评估集，`test_evaluation_suite.py` 使用真实 `AgentWorkflow`、`ExecutionPlan`、`AgentToolTracker` 和离线演示回答执行每条样例。评估工具是测试替身：它只写入与活动资料一致的最小指标、知识片段或网页摘要，不连接 PostgreSQL、向量模型、Tavily 或 LLM 服务。因此评估结果可重复，不会受数据变动、网络或模型随机性的影响。
+`backend/tests/evaluation_cases.py` 定义数据驱动的离线评估集，`test_evaluation_suite.py` 使用真实 `AgentWorkflow`、`ExecutionPlan`、`AgentToolTracker` 和确定性测试替身执行每条样例。评估工具只写入与活动资料一致的最小指标、知识片段或网页摘要，不连接 PostgreSQL、向量模型、Tavily 或 LLM 服务。因此评估结果可重复，不会受数据变动、网络或模型随机性的影响。
 
 首批样例包含 618、七夕、春季三类活动的指标查询、知识库问答与综合复盘，另外覆盖公开网页检索、内外部综合分析、知识库未命中和联网未配置。每条样例统一断言：
 
@@ -337,7 +337,7 @@ python -m pytest tests/test_evaluation_suite.py tests/test_evaluation_framework.
 - `USER_MEMORY_MAX_ACTIVE_RECORDS` 控制单个用户可保留的有效长期记忆上限，默认 `50`；达到上限时，用户需先通过“忘记 …”或“清除所有记忆”释放容量。
 - `CONVERSATION_SUMMARY_POLL_SECONDS`（默认 `1`）控制短期状态压缩 Worker 的空闲轮询间隔；`CONVERSATION_SUMMARY_MAX_ATTEMPTS`（默认 `3`）控制任务异常或 Worker 中断后的最大领取次数；`CONVERSATION_SUMMARY_LEASE_SECONDS`（默认 `300`）是 Worker 领取任务后的租约时长，超时任务会被自动回收。`CONVERSATION_MEMORY_TOKEN_BUDGET`（默认 `6000`）是会话短期状态总预算，`CONVERSATION_MEMORY_COMPACT_THRESHOLD`（默认 `4800`）是触发异步压缩的估算 token 阈值，`CONVERSATION_MEMORY_RECENT_MESSAGE_LIMIT`（默认 `6`）是压缩后最多保留的最近消息数。最近窗口还会受预算约束，避免少量超长消息阻止状态收缩。它们只影响短期状态大小，不会阻塞问答请求。
 - `KNOWLEDGE_UPLOAD_DIR` 默认 `/uploads`，由 Docker 映射为宿主机 `uploads/`；上传原件不写入镜像或数据库临时目录。
-- 当前模型适配器采用 OpenAI 兼容协议，因此可配置支持该协议的模型服务地址和模型名称，而不绑定特定厂商；未配置密钥和模型时启用演示模式。
+- 当前模型适配器采用 OpenAI 兼容协议，因此可配置支持该协议的模型服务地址和模型名称，而不绑定特定厂商；未配置密钥和模型时仅提供受控检索证据，不生成模拟结论。
 
 ## 6. Docker 部署
 

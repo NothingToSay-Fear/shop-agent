@@ -31,7 +31,7 @@ class OperationAgent:
     def __init__(self, settings: Settings | None = None) -> None:
         active_settings = settings or get_settings()
         self.workflow = AgentWorkflow(active_settings)
-        self.data_references = "演示模式：尚未检索到相关数据、资料或公开网页来源"
+        self.data_references = "本轮尚未检索到相关数据、资料或公开网页来源"
         self.tool_tracker = AgentToolTracker()
 
     async def stream_events(

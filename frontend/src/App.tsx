@@ -623,7 +623,6 @@ export function App() {
             <Typography.Title level={4}>{activeConversation?.title ?? "运营工作台"}</Typography.Title>
             <Typography.Text type="secondary">数据分析、资料问答与内容创作</Typography.Text>
           </div>
-          <Tag color="blue">MVP 演示模式</Tag>
         </header>
         <main className="conversation-content">
           {messages.length === 0 ? (

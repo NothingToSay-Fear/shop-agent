@@ -117,14 +117,20 @@ class AgentWorkflow:
             if answer is not None:
                 return WorkflowResult(answer, tracker.references, tracker)
 
-            await self._emit_status(on_status, "generation", "模型暂不可用，正在生成降级回答…")
+            await self._emit_status(on_status, "generation", "模型暂不可用，正在返回已验证依据…")
             return WorkflowResult(
-                self.answer_generator.generate_demo(user_input, tracker.data_context, model_error=True), tracker.references, tracker
+                self.answer_generator.generate_evidence_response(
+                    tracker.data_context, model_error=True
+                ),
+                tracker.references,
+                tracker,
             )
 
-        await self._emit_status(on_status, "generation", "正在整理已检索到的依据…")
+        await self._emit_status(on_status, "generation", "LLM 未配置，正在返回已验证依据…")
         return WorkflowResult(
-            self.answer_generator.generate_demo(user_input, tracker.data_context), tracker.references, tracker
+            self.answer_generator.generate_evidence_response(tracker.data_context),
+            tracker.references,
+            tracker,
         )
 
     async def _resolve_route(

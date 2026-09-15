@@ -108,7 +108,7 @@ class AgentToolTracker:
         """返回实际检索到的来源，避免把未调用的能力写入会话记录。"""
         references: list[str] = []
         if self.metric_context:
-            references.append(f"内置模拟经营数据：{', '.join(self.metric_context.metric_codes)}")
+            references.append(f"经营数据：{', '.join(self.metric_context.metric_codes)}")
         if self.knowledge_context:
             references.append(self.knowledge_context.references)
         if self.web_context:
@@ -122,4 +122,4 @@ class AgentToolTracker:
             misses.append("联网搜索未检索到相关资料或尚未配置")
         if misses:
             return "；".join(misses)
-        return "演示模式：尚未检索到相关数据、资料或公开网页来源"
+        return "本轮尚未检索到相关数据、资料或公开网页来源"

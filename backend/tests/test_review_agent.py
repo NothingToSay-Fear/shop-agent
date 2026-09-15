@@ -32,7 +32,7 @@ def test_agent_tool_tracker_only_persists_actual_references() -> None:
     tracker = AgentToolTracker()
 
     assert tracker.data_context is None
-    assert tracker.references == "演示模式：尚未检索到相关数据、资料或公开网页来源"
+    assert tracker.references == "本轮尚未检索到相关数据、资料或公开网页来源"
 
 
 def test_main_agent_tools_include_controlled_web_search() -> None:

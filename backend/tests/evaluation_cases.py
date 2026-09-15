@@ -70,7 +70,7 @@ EVALUATION_CASES: tuple[EvaluationCase, ...] = (
         question="2026年6月6日至6月18日 618 正式期 GMV 是多少？",
         route_mode="metrics",
         expected_tools=("query_metric_rag",),
-        expected_answer_terms=("经营数据分析", "618 正式期", "GMV"),
+        expected_answer_terms=("【经营指标】", "618 正式期", "GMV"),
         tool_results={
             "query_metric_rag": _metric_result(
                 "618 正式期（2026-06-06 至 2026-06-18）",
@@ -85,7 +85,7 @@ EVALUATION_CASES: tuple[EvaluationCase, ...] = (
         question="七夕礼赠活动期间的支付订单数是多少？",
         route_mode="metrics",
         expected_tools=("query_metric_rag",),
-        expected_answer_terms=("经营数据分析", "七夕礼赠活动期", "支付订单数"),
+        expected_answer_terms=("【经营指标】", "七夕礼赠活动期", "支付订单数"),
         tool_results={
             "query_metric_rag": _metric_result(
                 "七夕礼赠活动期（2026-08-10 至 2026-08-22）",
@@ -100,7 +100,7 @@ EVALUATION_CASES: tuple[EvaluationCase, ...] = (
         question="春季上新活动的 GMV 和支付订单数是多少？",
         route_mode="metrics",
         expected_tools=("query_metric_rag",),
-        expected_answer_terms=("经营数据分析", "春季上新活动期", "86,400.00"),
+        expected_answer_terms=("【经营指标】", "春季上新活动期", "86,400.00"),
         tool_results={
             "query_metric_rag": _metric_result(
                 "春季上新活动期（2026-03-08 至 2026-03-14）",
@@ -161,7 +161,7 @@ EVALUATION_CASES: tuple[EvaluationCase, ...] = (
         question="结合 618 正式期数据和活动规则做一次复盘。",
         route_mode="hybrid",
         expected_tools=("query_metric_rag", "query_knowledge_rag"),
-        expected_answer_terms=("综合依据", "618 正式期", "优惠券"),
+        expected_answer_terms=("【经营指标】", "618 正式期", "优惠券"),
         tool_results={
             "query_metric_rag": _metric_result(
                 "618 正式期（2026-06-06 至 2026-06-18）",
@@ -181,7 +181,7 @@ EVALUATION_CASES: tuple[EvaluationCase, ...] = (
         question="结合七夕礼赠活动数据和方案复盘组合款表现。",
         route_mode="hybrid",
         expected_tools=("query_metric_rag", "query_knowledge_rag"),
-        expected_answer_terms=("综合依据", "七夕礼赠活动期", "组合款"),
+        expected_answer_terms=("【经营指标】", "七夕礼赠活动期", "组合款"),
         tool_results={
             "query_metric_rag": _metric_result(
                 "七夕礼赠活动期（2026-08-10 至 2026-08-22）",
@@ -201,7 +201,7 @@ EVALUATION_CASES: tuple[EvaluationCase, ...] = (
         question="根据春季上新数据和复盘资料总结下一次优化方向。",
         route_mode="hybrid",
         expected_tools=("query_metric_rag", "query_knowledge_rag"),
-        expected_answer_terms=("综合依据", "86,400.00", "内容种草"),
+        expected_answer_terms=("【经营指标】", "86,400.00", "内容种草"),
         tool_results={
             "query_metric_rag": _metric_result(
                 "春季上新活动期（2026-03-08 至 2026-03-14）",
@@ -222,7 +222,7 @@ EVALUATION_CASES: tuple[EvaluationCase, ...] = (
         question="最新的平台公开规则有哪些？",
         route_mode="web",
         expected_tools=("search_web",),
-        expected_answer_terms=("联网检索依据", "平台公开公告"),
+        expected_answer_terms=("【联网公开资料】", "平台公开公告"),
         tool_results={"search_web": WEB_RESULT},
     ),
     EvaluationCase(
@@ -231,7 +231,7 @@ EVALUATION_CASES: tuple[EvaluationCase, ...] = (
         question="结合 618 数据、活动规则和最新平台公开政策给出复盘建议。",
         route_mode="web_hybrid",
         expected_tools=("query_metric_rag", "query_knowledge_rag", "search_web"),
-        expected_answer_terms=("综合依据", "618 正式期", "平台公开公告"),
+        expected_answer_terms=("【经营指标】", "618 正式期", "平台公开公告"),
         tool_results={
             "query_metric_rag": _metric_result(
                 "618 正式期（2026-06-06 至 2026-06-18）",
@@ -261,7 +261,7 @@ EVALUATION_CASES: tuple[EvaluationCase, ...] = (
         question="今天北京天气如何？",
         route_mode="web",
         expected_tools=("search_web",),
-        expected_answer_terms=("联网检索依据", "未检索到"),
+        expected_answer_terms=("【联网公开资料】", "未检索到"),
         tool_results={
             "search_web": EvaluationToolResult(
                 status="skipped", error_code="web_search_disabled"

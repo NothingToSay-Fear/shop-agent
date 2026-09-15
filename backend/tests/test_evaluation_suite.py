@@ -123,6 +123,8 @@ async def test_agent_workflow_matches_fixed_evaluation_case(
     assert _references_match_tool_types(result.tracker) is True
     for term in case.expected_answer_terms:
         assert term in result.answer
+    assert "演示模式" not in result.answer
+    assert "初步诊断" not in result.answer
 
 
 def _references_match_tool_types(tracker: AgentToolTracker) -> bool:
