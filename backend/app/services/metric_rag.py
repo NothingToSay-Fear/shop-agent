@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings, get_settings
 from app.models import DailyMetric, MetricDefinition
+from app.services.business_dates import current_business_date
 from app.services.local_embeddings import embed_texts
 from app.services.activity_periods import ACTIVITY_PERIODS
 from app.services.date_ranges import parse_explicit_date_range, parse_explicit_date_ranges
@@ -482,12 +483,15 @@ def _resolve_dependencies(
 
 
 async def _resolve_period(session: AsyncSession, question: str) -> tuple[date, date] | None:
-    """将当前支持的自然语言时间范围映射为受控日期参数。"""
+    """将自然语言时间范围映射为受控日期参数，默认范围不使用未来数据。"""
     explicit_period = parse_explicit_date_range(question)
     if explicit_period is not None:
         return explicit_period
     latest_date = await session.scalar(
-        select(func.max(DailyMetric.metric_date)).where(DailyMetric.source == "demo")
+        select(func.max(DailyMetric.metric_date)).where(
+            DailyMetric.source == "demo",
+            DailyMetric.metric_date <= current_business_date(),
+        )
     )
     if latest_date is None:
         return None

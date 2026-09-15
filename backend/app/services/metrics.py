@@ -8,6 +8,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import DailyMetric
+from app.services.business_dates import current_business_date
 
 
 @dataclass(frozen=True)
@@ -60,9 +61,12 @@ class MetricsOverview:
 
 
 async def get_metrics_overview(session: AsyncSession) -> MetricsOverview | None:
-    """根据数据库中最新的 14 天模拟数据计算最近两周的环比摘要。"""
+    """按当前业务日及以前的可用数据计算最近两周的环比摘要。"""
     latest_date = await session.scalar(
-        select(func.max(DailyMetric.metric_date)).where(DailyMetric.source == "demo")
+        select(func.max(DailyMetric.metric_date)).where(
+            DailyMetric.source == "demo",
+            DailyMetric.metric_date <= current_business_date(),
+        )
     )
     if latest_date is None:
         return None

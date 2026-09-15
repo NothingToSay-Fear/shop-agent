@@ -10,10 +10,21 @@ from app.services.metric_rag import (
     _calculate_metric,
     _format_unit_comparison,
     _parse_explicit_date_range,
+    _resolve_period,
     _resolve_dependencies,
     build_metric_query_plan,
     retrieve_metrics,
 )
+
+
+class _LatestDateSession:
+    """仅模拟默认周期解析所需的最新可用数据日期。"""
+
+    def __init__(self, latest_date: date | None) -> None:
+        self.latest_date = latest_date
+
+    async def scalar(self, _statement: object) -> date | None:
+        return self.latest_date
 
 
 def test_rag_retrieves_metric_by_business_alias() -> None:
@@ -67,6 +78,18 @@ def test_explicit_date_range_uses_controlled_date_values() -> None:
     period = _parse_explicit_date_range("查询 2026 年 6 月 6 日至 6 月 18 日的 618 GMV")
 
     assert period == (date(2026, 6, 6), date(2026, 6, 18))
+
+
+@pytest.mark.asyncio
+async def test_default_period_uses_latest_data_not_later_than_business_today(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """预置的未来演示数据不能被没有日期条件的问题默认查询。"""
+    monkeypatch.setattr("app.services.metric_rag.current_business_date", lambda: date(2026, 9, 15))
+
+    period = await _resolve_period(_LatestDateSession(date(2026, 9, 15)), "查看 GMV")
+
+    assert period == (date(2026, 9, 9), date(2026, 9, 15))
 
 
 def test_metric_query_plan_keeps_each_explicit_period_as_a_controlled_unit() -> None:
