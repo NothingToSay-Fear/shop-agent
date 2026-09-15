@@ -65,6 +65,10 @@ export interface AgentRunAudit {
   context_snapshot: Record<string, unknown>;
   memory_summary: string | null;
   memory_ids: string[];
+  conversation_summary_version: number | null;
+  conversation_summary_used: boolean;
+  conversation_history_ids: string[];
+  conversation_history_used: boolean;
   status: string;
   answer_summary: string | null;
   reference_ids: string[];

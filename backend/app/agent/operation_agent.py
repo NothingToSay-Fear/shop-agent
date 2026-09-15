@@ -10,6 +10,8 @@ from app.agent.tools import AgentToolTracker
 from app.agent.workflow import AgentWorkflow
 from app.config import Settings, get_settings
 from app.services.conversation_context import ConversationContextSnapshot
+from app.services.conversation_history import ConversationHistoryContext
+from app.services.conversation_summary import ConversationSummaryContext
 from app.services.intent_router import RetrievalMode
 from app.services.user_memory import UserMemoryContext
 
@@ -39,6 +41,8 @@ class OperationAgent:
         conversation_context: ConversationContextSnapshot | None = None,
         user_memory_context: UserMemoryContext | None = None,
         user_id: str | None = None,
+        conversation_summary_context: ConversationSummaryContext | None = None,
+        conversation_history_context: ConversationHistoryContext | None = None,
     ) -> AsyncIterator[AgentStreamEvent]:
         """并发接收工作流阶段事件，完成后再流式输出回答文本。"""
         queue: asyncio.Queue[AgentStreamEvent | Exception | object] = asyncio.Queue()
@@ -56,6 +60,8 @@ class OperationAgent:
                     conversation_context,
                     user_memory_context,
                     user_id,
+                    conversation_summary_context,
+                    conversation_history_context,
                 )
                 await queue.put(result)
             except Exception as error:

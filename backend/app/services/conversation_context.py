@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import date
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import AgentRun, ConversationContext, Message, MetricDefinition
+from app.models import ConversationContext, MetricDefinition
 from app.services.activity_periods import ACTIVITY_PERIODS
 from app.services.date_ranges import parse_explicit_date_range
 from app.services.metric_rag import METRIC_DEFINITION_SEEDS
@@ -30,20 +30,6 @@ _CLEAR_FIELD_PATTERNS = {
 
 
 @dataclass(frozen=True)
-class RecentTurnSummary:
-    """仅携带上一轮已完成回答的受限摘要，用于处理“刚才/上一步”等指代。"""
-
-    run_id: str
-    answer_excerpt: str
-    reference_ids: tuple[str, ...]
-
-    @property
-    def display(self) -> str:
-        references = "、".join(self.reference_ids) if self.reference_ids else "无"
-        return f"上一轮结论摘要：{self.answer_excerpt}\n上一轮引用 ID：{references}\n来源运行：{self.run_id}"
-
-
-@dataclass(frozen=True)
 class ConversationContextSnapshot:
     """一次会话中可安全继承的、仅来自用户明确输入的结构化条件。"""
 
@@ -53,7 +39,6 @@ class ConversationContextSnapshot:
     metric_hints: tuple[str, ...] = ()
     analysis_goal: str | None = None
     field_sources: dict[str, str] | None = None
-    recent_turn: RecentTurnSummary | None = None
 
     @property
     def display(self) -> str:
@@ -76,14 +61,8 @@ class ConversationContextSnapshot:
 
     @property
     def generation_context(self) -> str:
-        """生成层可见的最小上下文；最近结论绝不参与路由或工具入参。"""
-        parts = [f"已确认查询条件：{self.display or '无'}"]
-        if self.recent_turn is not None:
-            parts.append(
-                "以下是上一轮已完成回答的受限摘要，仅用于理解指代，"
-                "不能替代本轮工具依据：\n" + self.recent_turn.display
-            )
-        return "\n\n".join(parts)
+        """生成层可见的最小结构化条件；不混入会话原文。"""
+        return f"已确认查询条件：{self.display or '无'}"
 
     def as_audit_snapshot(self) -> dict[str, object]:
         """保存本轮实际采用的结构化字段，便于后续准确复盘。"""
@@ -94,14 +73,6 @@ class ConversationContextSnapshot:
             "metric_hints": list(self.metric_hints),
             "analysis_goal": self.analysis_goal,
             "field_sources": dict(self.field_sources or {}),
-            "recent_turn": (
-                {
-                    "run_id": self.recent_turn.run_id,
-                    "reference_ids": list(self.recent_turn.reference_ids),
-                }
-                if self.recent_turn
-                else None
-            ),
         }
 
 
@@ -145,8 +116,6 @@ async def build_and_persist_context(
     result = build_context_snapshot(
         previous, question, source_message_id, metric_hints
     )
-    recent_turn = await _load_recent_turn_summary(session, conversation_id)
-    result = replace(result, snapshot=replace(result.snapshot, recent_turn=recent_turn))
     if record is None:
         record = ConversationContext(conversation_id=conversation_id)
         session.add(record)
@@ -266,34 +235,6 @@ async def _load_metric_hints(session: AsyncSession) -> tuple[MetricHint, ...]:
     if not definitions:
         return DEFAULT_METRIC_HINTS
     return tuple((item.name, tuple([item.name, *item.aliases])) for item in definitions)
-
-
-async def _load_recent_turn_summary(
-    session: AsyncSession, conversation_id: str
-) -> RecentTurnSummary | None:
-    """从消息主存读取最近一条已完成回答，限制长度后仅在本轮生成阶段使用。"""
-    row = (
-        await session.execute(
-            select(AgentRun, Message.content)
-            .join(Message, AgentRun.agent_message_id == Message.id)
-            .where(AgentRun.conversation_id == conversation_id, AgentRun.status == "completed")
-            .order_by(AgentRun.completed_at.desc())
-            .limit(1)
-        )
-    ).first()
-    if row is None:
-        return None
-    run, answer = row
-    return RecentTurnSummary(
-        run_id=run.id,
-        answer_excerpt=_truncate_summary(answer),
-        reference_ids=tuple(run.reference_ids or ()),
-    )
-
-
-def _truncate_summary(answer: str, limit: int = 500) -> str:
-    normalized = re.sub(r"\s+", " ", answer).strip()
-    return normalized if len(normalized) <= limit else f"{normalized[:limit]}…"
 
 
 def _snapshot_from_record(record: ConversationContext | None) -> ConversationContextSnapshot:

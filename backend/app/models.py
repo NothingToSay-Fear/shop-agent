@@ -125,6 +125,87 @@ class ConversationContext(Base, TimestampMixin):
     field_sources: Mapped[dict[str, str]] = mapped_column(JSON, nullable=False, default=dict)
 
 
+class ConversationSummary(Base, TimestampMixin):
+    """同会话短期状态：压缩摘要与有限最近窗口，不能替代受控检索依据。"""
+
+    __tablename__ = "conversation_summaries"
+
+    conversation_id: Mapped[str] = mapped_column(
+        ForeignKey("conversations.id", ondelete="CASCADE"), primary_key=True
+    )
+    summary_text: Mapped[str] = mapped_column(Text, nullable=False)
+    topics: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    discussion_points: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    open_questions: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    source_message_ids: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    source_run_ids: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    recent_turns: Mapped[list[dict[str, str]]] = mapped_column(JSON, nullable=False, default=list)
+    estimated_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    covered_until_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+
+
+class ConversationSummaryJob(Base, TimestampMixin):
+    """持久化会话摘要任务；避免在流式回答请求内同步调用模型。"""
+
+    __tablename__ = "conversation_summary_jobs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    conversation_id: Mapped[str] = mapped_column(
+        ForeignKey("conversations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    source_agent_message_id: Mapped[str] = mapped_column(
+        ForeignKey("messages.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="queued", index=True)
+    attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    max_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
+    run_after: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False, index=True
+    )
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    lease_token: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class ConversationHistoryUnit(Base, TimestampMixin):
+    """同会话的一问一答历史单元，供短期状态压缩后的按需召回使用。"""
+
+    __tablename__ = "conversation_history_units"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    conversation_id: Mapped[str] = mapped_column(
+        ForeignKey("conversations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    user_message_id: Mapped[str] = mapped_column(
+        ForeignKey("messages.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    agent_message_id: Mapped[str] = mapped_column(
+        ForeignKey("messages.id", ondelete="CASCADE"), nullable=False, unique=True
+    )
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    search_terms: Mapped[str] = mapped_column(Text, nullable=False)
+    embedding_vector: Mapped[list[float] | None] = mapped_column(Vector(512), nullable=True)
+    embedding_model: Mapped[str | None] = mapped_column(String(100), nullable=True)
+
+
+class ConversationHistoryIndexJob(Base, TimestampMixin):
+    """历史单元向量化任务；词面召回在任务等待期间仍可用。"""
+
+    __tablename__ = "conversation_history_index_jobs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    unit_id: Mapped[str] = mapped_column(
+        ForeignKey("conversation_history_units.id", ondelete="CASCADE"), nullable=False, unique=True, index=True
+    )
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="queued", index=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class Product(Base, TimestampMixin):
     """用于内容生成与经营数据关联的商品基础资料。"""
 
@@ -309,6 +390,10 @@ class AgentRun(Base):
     context_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     context_actions: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
     context_snapshot: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False, default=dict)
+    conversation_summary_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    conversation_summary_used: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    conversation_history_ids: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    conversation_history_used: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     memory_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     memory_ids: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="running")

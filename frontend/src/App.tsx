@@ -802,6 +802,16 @@ export function App() {
             <Typography.Text>
               长期记忆：{auditRecord.memory_summary ?? "本轮未采用长期记忆"}
             </Typography.Text>
+            <Typography.Text>
+              会话短期状态：{auditRecord.conversation_summary_used
+                ? `已采用版本 ${auditRecord.conversation_summary_version ?? "-"}（仅用于保持对话连续性）`
+                : "本轮未采用"}
+            </Typography.Text>
+            <Typography.Text>
+              会话历史召回：{auditRecord.conversation_history_used
+                ? `采用 ${auditRecord.conversation_history_ids.length} 条相关历史片段（仅用于保持对话连续性）`
+                : "本轮未采用"}
+            </Typography.Text>
             {auditRecord.memory_ids.length > 0 && (
               <Typography.Text type="secondary">记忆 ID：{auditRecord.memory_ids.join("、")}</Typography.Text>
             )}

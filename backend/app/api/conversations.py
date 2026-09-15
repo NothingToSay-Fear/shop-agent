@@ -15,6 +15,10 @@ from app.models import (
     AgentRun,
     Conversation,
     ConversationContext,
+    ConversationHistoryIndexJob,
+    ConversationHistoryUnit,
+    ConversationSummary,
+    ConversationSummaryJob,
     Message,
     ToolCall,
     User,
@@ -37,6 +41,14 @@ from app.services.agent_audit import (
     update_run_route,
 )
 from app.services.conversation_context import build_and_persist_context
+from app.services.conversation_history import (
+    enqueue_history_unit_after_turn,
+    retrieve_history_for_generation,
+)
+from app.services.conversation_summary import (
+    retrieve_summary_for_generation,
+    update_memory_state_after_turn,
+)
 from app.services.authentication import get_current_user
 from app.services.user_memory import MemoryService
 
@@ -110,6 +122,28 @@ async def delete_conversation(
     await session.execute(
         delete(UserMemoryCandidate).where(UserMemoryCandidate.conversation_id == conversation_id)
     )
+    await session.execute(
+        delete(ConversationSummaryJob).where(
+            ConversationSummaryJob.conversation_id == conversation_id
+        )
+    )
+    await session.execute(
+        delete(ConversationSummary).where(ConversationSummary.conversation_id == conversation_id)
+    )
+    await session.execute(
+        delete(ConversationHistoryIndexJob).where(
+            ConversationHistoryIndexJob.unit_id.in_(
+                select(ConversationHistoryUnit.id).where(
+                    ConversationHistoryUnit.conversation_id == conversation_id
+                )
+            )
+        )
+    )
+    await session.execute(
+        delete(ConversationHistoryUnit).where(
+            ConversationHistoryUnit.conversation_id == conversation_id
+        )
+    )
     await session.execute(delete(AgentRun).where(AgentRun.conversation_id == conversation_id))
     await session.execute(delete(Message).where(Message.conversation_id == conversation_id))
     await session.execute(
@@ -172,6 +206,10 @@ async def create_message(
     )
     memory_context = await MemoryService.retrieve_for_query(session, current_user.id, payload.content)
     await MemoryService.record_context_usage(session, current_user.id, memory_context)
+    summary_context = await retrieve_summary_for_generation(session, conversation_id)
+    history_context = await retrieve_history_for_generation(
+        session, conversation_id, payload.content, summary_context
+    )
 
     # 先提交运行起点，确保流式调用中断时仍有可排查的失败轨迹。
     run = AgentRun(
@@ -183,6 +221,10 @@ async def create_message(
         context_snapshot=context_result.snapshot.as_audit_snapshot(),
         memory_summary=memory_context.audit_summary,
         memory_ids=memory_context.ids,
+        conversation_summary_version=summary_context.version,
+        conversation_summary_used=summary_context.used,
+        conversation_history_ids=list(history_context.unit_ids),
+        conversation_history_used=history_context.used,
     )
     session.add(run)
     await session.commit()
@@ -200,6 +242,8 @@ async def create_message(
                 conversation_context=context_result.snapshot,
                 user_memory_context=memory_context,
                 user_id=current_user.id,
+                conversation_summary_context=summary_context,
+                conversation_history_context=history_context,
             ):
                 if event.event_type == "status":
                     yield _event("status", {"content": event.content, "phase": event.phase or ""})
@@ -222,6 +266,33 @@ async def create_message(
             persist_tool_calls(session, run, agent_message.id, agent.tool_tracker.tool_calls)
             await session.commit()
             log_run_completed(run, agent.tool_tracker)
+            try:
+                await update_memory_state_after_turn(
+                    session,
+                    conversation_id,
+                    user_message.id,
+                    payload.content,
+                    agent_message.id,
+                    full_answer,
+                    run.id,
+                )
+            except Exception:
+                # 短期记忆为辅助状态，更新失败不能影响本轮已完成的回答和审计记录。
+                await session.rollback()
+                logger.exception("conversation_memory_state_update_failed")
+            try:
+                await enqueue_history_unit_after_turn(
+                    session,
+                    conversation_id,
+                    user_message.id,
+                    payload.content,
+                    agent_message.id,
+                    full_answer,
+                )
+            except Exception:
+                # 历史召回索引是连续性辅助能力，写入失败不能影响本轮已完成回答。
+                await session.rollback()
+                logger.exception("conversation_history_index_enqueue_failed")
             try:
                 candidate = await MemoryService.create_candidate_if_eligible(
                     session,
@@ -304,6 +375,10 @@ async def get_message_audit(
         context_snapshot=run.context_snapshot,
         memory_summary=run.memory_summary,
         memory_ids=run.memory_ids,
+        conversation_summary_version=run.conversation_summary_version,
+        conversation_summary_used=run.conversation_summary_used,
+        conversation_history_ids=run.conversation_history_ids,
+        conversation_history_used=run.conversation_history_used,
         status=run.status,
         answer_summary=run.answer_summary,
         reference_ids=run.reference_ids,

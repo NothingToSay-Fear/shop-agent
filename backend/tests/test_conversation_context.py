@@ -2,7 +2,6 @@ from datetime import date
 
 from app.services.conversation_context import (
     ConversationContextSnapshot,
-    RecentTurnSummary,
     build_context_snapshot,
     build_retrieval_question,
 )
@@ -88,21 +87,19 @@ def test_date_range_parser_accepts_common_operator_formats() -> None:
     )
 
 
-def test_context_can_be_cleared_and_recent_turn_stays_out_of_retrieval_query() -> None:
-    """重置条件后不遗留范围；上一轮结论仅供回答层理解指代。"""
+def test_context_can_be_cleared_without_mixing_in_message_history() -> None:
+    """重置条件后不遗留范围；会话原文不由条件快照读取。"""
     previous = ConversationContextSnapshot(
         activity="七夕",
         start_date=date(2026, 8, 10),
         end_date=date(2026, 8, 22),
         metric_hints=("支付 GMV",),
-        recent_turn=RecentTurnSummary("run-1", "GMV 环比下降 8%。", ("metric:paid_gmv",)),
     )
 
     assert "上一轮结论摘要" not in build_retrieval_question("为什么下降？", previous)
-    assert "上一轮结论摘要" in previous.generation_context
+    assert "上一轮结论摘要" not in previous.generation_context
 
     result = build_context_snapshot(previous, "清除会话条件", "message-8")
 
     assert result.snapshot.display == ""
     assert result.snapshot.metric_hints == ()
-    assert result.snapshot.recent_turn is None

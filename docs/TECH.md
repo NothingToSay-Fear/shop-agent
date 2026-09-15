@@ -178,7 +178,8 @@ OperationAgent（流式输出）
 - 配置 `LLM_API_KEY` 和 `LLM_MODEL` 后使用 DeepAgent 执行 LangChain/LangGraph Agent 流程，但模型只能在系统已完成并校验执行计划后基于受控上下文总结；模型不可用时，主 Agent 使用同一批已执行工具结果进入演示回答。
 - `ContextBuilder` 在保存用户消息后合并会话中已确认的活动、日期、指标提示和分析目标。当前轮明确条件覆盖旧值；支持清除或重置；未出现的条件可继承；模糊表达不会触发条件猜测。它统一识别中文、ISO 和 `8/16–8/22` 等月/日日期范围；只给路由和检索提供“原问题 + 条件摘要”。
 - 会话中的 `start_date`、`end_date` 不再由指标 RAG 从摘要文本二次解析：工作流将其作为 `date` 类型参数传给 `query_metric_rag`，再由 `MetricQueryConstraints` 绑定到受控 SQL 模板。单一继承范围作为默认单元；本轮明确出现多个活动或多个日期范围时，`MetricQueryPlan` 以本轮多单元范围为准。条件摘要仅用于语义路由与可解释展示。
-- 最近一轮已完成回答会从消息主存按需截取为最多 500 字的结论摘要，并附带来源 `run_id`、引用 ID；它只进入回答生成提示词以理解“刚才/上一轮”等指代，绝不参与路由、工具入参或 SQL。
+- `ConversationSummary` 是同会话短期状态，而非仅保存摘要：它保存压缩讨论摘要、主题/要点/待验证项和有限的最近消息窗口。每轮回答完成后，API 直接将本轮精简窗口写入该状态；它不反查 `messages` 表。状态行以 `FOR UPDATE` 串行化同一会话的追加，首次创建时先锁定会话父行，避免并发请求丢失轮次。状态估算 token 数达到 `CONVERSATION_MEMORY_COMPACT_THRESHOLD` 后创建 `ConversationSummaryJob`；独立 `conversation-summary-worker` 通过 `FOR UPDATE SKIP LOCKED` 领取任务，并绑定租约令牌。Worker 中断后，租约到期的任务会自动重新排队；执行异常按指数退避重试，达到 `CONVERSATION_SUMMARY_MAX_ATTEMPTS` 后才标记失败。模型不可用或返回非 JSON 时采用长度受限的确定性降级摘要，绝不阻塞本轮回答。每轮回答生成均读取短期状态，不依赖历史指代关键词；路由、问题扩展、RAG 候选召回、工具入参和 SQL 仍只使用当前问题与 `ConversationContext` 的结构化条件。`agent_runs` 记录短期状态版本和是否实际采用，压缩状态记录来源消息 ID 与 `run_id`，便于追溯。
+- `ConversationHistoryUnit` 是独立于短期状态的会话内历史 RAG 索引：每个完成的一问一答生成一个长度受限单元，立即写入 jieba 词项，Worker 再异步补齐 pgvector 向量。仅当 `ConversationSummary` 已有压缩摘要时，API 才按当前问题在同一会话内查询 HNSW 向量候选和 GIN 全文候选、RRF 融合并按需 CrossEncoder 精排；没有精排或嵌入模型时分别保留 RRF 或全文召回。命中的最多两条历史单元仅传入生成提示词，不参与路由、查询扩展、工具入参和 SQL；`agent_runs` 只审计其 ID 与采用标记。首期不回填旧会话单元，也不承诺逐字恢复早期原文。
 - 未配置模型时使用演示模式，保证本地开发和 Docker 验收不依赖密钥。
 - 后续通过工具适配器接入商品、订单、流量及推广数据源；数据结论必须带数据范围与查询时间。
 
@@ -202,8 +203,12 @@ OperationAgent（流式输出）
 | `users` | 本地登录账号、显示名称和 scrypt 密码散列 |
 | `auth_tokens` | 可撤销的登录令牌摘要、归属用户及过期时间 |
 | `conversation_contexts` | 会话内已确认的活动、时间范围、指标提示、分析目标及字段来源消息 ID |
+| `conversation_summaries` | 同一会话的短期状态：压缩摘要、主题、要点、待验证项、有限最近窗口、token 估算、来源和版本；仅用于回答连续性 |
+| `conversation_summary_jobs` | 会话摘要异步生成任务的状态、来源回答、失败原因和时间 |
+| `conversation_history_units` | 同会话一问一答的截断检索单元、中文词项、pgvector 向量及来源消息 ID；只用于按需补充回答背景 |
+| `conversation_history_index_jobs` | 历史单元异步向量化任务状态；嵌入模型不可用时仍保留全文召回 |
 | `messages` | 用户与 Agent 消息、回答状态及数据引用 |
-| `agent_runs` | 每次 Agent 问答的 `run_id`、脱敏摘要、实际采用的结构化上下文快照、会话条件变化、路由、状态、总耗时和引用 ID；保留 15 天 |
+| `agent_runs` | 每次 Agent 问答的 `run_id`、脱敏摘要、实际采用的结构化上下文快照、会话条件变化、短期状态版本/采用标记、历史单元 ID/采用标记、路由、状态、总耗时和引用 ID；保留 15 天 |
 | `tool_calls` | 关联 `run_id` 的工具调用摘要、引用 ID、结果、耗时和错误信息；随运行记录级联清理 |
 | `products` | 内置模拟商品资料，后续可替换为真实商品数据源 |
 | `daily_metrics` | 覆盖 2026 全年的按日期、商品和渠道汇总的模拟经营指标，另含活动专项渠道数据 |
@@ -259,7 +264,7 @@ OperationAgent（流式输出）
 
 工具状态统一为 `success`、`empty`、`skipped` 和 `failed`。例如未配置 Tavily 时，`search_web` 会留下 `status=skipped`、`error_code=web_search_disabled`，因此可直接定位“为什么没有联网搜索”。应用日志同时输出带 `run_id` 的 key-value 摘要，适合通过 `docker compose logs -f api` 检索。
 
-审计表只保存问题/回答的结构化摘要、工具输入/输出摘要、引用 ID 和结构化条件快照：不保存原始问题、回答副本、文档正文、网页正文、向量或密钥。上一轮结论摘要只从 `messages` 按需读取，不作为第二份长期副本保存。API 启动后执行一次过期清理，并每 24 小时删除创建时间早于 15 天的 `agent_runs`；关联 `tool_calls` 由数据库外键级联删除。用户也可手动删除自己的已完成会话；接口在同一事务内按依赖逆序清理消息、短期条件、待确认记忆候选、运行审计和工具轨迹，已确认的 `user_memories` 不会随会话删除。
+审计表只保存问题/回答的结构化摘要、工具输入/输出摘要、引用 ID、结构化条件快照、会话短期状态版本/采用标记及会话历史单元 ID/采用标记：不保存原始问题、回答副本、文档正文、网页正文、向量或密钥。短期状态与历史单元均限制在同一会话范围，不作为跨会话长期记忆。API 启动后执行一次过期清理，并每 24 小时删除创建时间早于 15 天的 `agent_runs`；关联 `tool_calls` 由数据库外键级联删除。用户也可手动删除自己的已完成会话；接口在同一事务内按依赖逆序清理消息、短期条件、滚动摘要/任务、历史单元/任务、待确认记忆候选、运行审计和工具轨迹，已确认的 `user_memories` 不会随会话删除。
 
 ### 4.2 执行阶段 SSE 与前端展示
 
@@ -328,15 +333,18 @@ python -m pytest tests/test_evaluation_suite.py tests/test_evaluation_framework.
 - `LLM_API_KEY`、`LLM_MODEL` 和可选的 `LLM_BASE_URL` 均通过环境变量配置；不预设任何模型。
 - `WEB_SEARCH_API_KEY` 仅用于 Tavily 联网搜索；为空时该工具关闭，不会隐式访问外部网络。公开网页摘要不自动沉淀为知识库。
 - `AUTH_TOKEN_TTL_DAYS` 控制本地登录令牌有效期，默认 `7`；修改后新签发令牌按新期限生效。
+- `CONVERSATION_SUMMARY_POLL_SECONDS`（默认 `1`）控制短期状态压缩 Worker 的空闲轮询间隔；`CONVERSATION_SUMMARY_MAX_ATTEMPTS`（默认 `3`）控制任务异常或 Worker 中断后的最大领取次数；`CONVERSATION_SUMMARY_LEASE_SECONDS`（默认 `300`）是 Worker 领取任务后的租约时长，超时任务会被自动回收。`CONVERSATION_MEMORY_TOKEN_BUDGET`（默认 `6000`）是会话短期状态总预算，`CONVERSATION_MEMORY_COMPACT_THRESHOLD`（默认 `4800`）是触发异步压缩的估算 token 阈值，`CONVERSATION_MEMORY_RECENT_MESSAGE_LIMIT`（默认 `6`）是压缩后最多保留的最近消息数。最近窗口还会受预算约束，避免少量超长消息阻止状态收缩。它们只影响短期状态大小，不会阻塞问答请求。
 - `KNOWLEDGE_UPLOAD_DIR` 默认 `/uploads`，由 Docker 映射为宿主机 `uploads/`；上传原件不写入镜像或数据库临时目录。
 - 当前模型适配器采用 OpenAI 兼容协议，因此可配置支持该协议的模型服务地址和模型名称，而不绑定特定厂商；未配置密钥和模型时启用演示模式。
 
 ## 6. Docker 部署
 
-Docker Compose 包含四个常驻服务和一个按需工具服务：
+Docker Compose 包含六个常驻服务和一个按需工具服务：
 
 - `frontend`：构建并提供 React 静态页面。
 - `api`：运行 FastAPI 与 Agent 服务。
+- `knowledge-worker`：异步解析、切分和向量化知识库资料。
+- `conversation-summary-worker`：异步压缩同会话短期状态，并为新历史单元补齐本地向量。
 - `adminer`：提供浏览器访问的 PostgreSQL 管理界面，仅用于本地查看和排查数据。
 - `db`：运行 PostgreSQL，并使用命名数据卷保存数据。
 
@@ -354,7 +362,7 @@ API 容器启动时会先执行数据库迁移，再运行 `python -m app.seed`�
 
 如需重新生成测试业务数据，可在人工确认后执行 `docker compose exec api python -m app.seed --reset-business-data`。该命令会永久删除 `products` 和 `daily_metrics` 中的全部记录，再写入上述 2026 年模拟商品和指标；不会删除账号、会话、记忆、指标定义或知识库文件，不能用于保留真实业务数据的环境。知识库原始文件保存在 `uploads/` 挂载目录，重建 API 容器不会丢失；不要随意删除该目录。
 
-本地语义向量与精排模型不随镜像或 Git 仓库提交。首次使用依次执行 `docker compose build api knowledge-worker model-download`、`docker compose run --rm model-download`、`docker compose up -d api knowledge-worker` 和 `docker compose exec api python -m app.reindex_embeddings`。下载工具会将嵌入模型保存到 `models/bge-small-zh-v1.5`、精排模型保存到 `models/bge-reranker-base`，随后均以只读卷挂载给 API 与 Worker；下载完成后重建指标定义，并从原始文件重新解析结构化知识库片段、向量和词面索引。需要暂时跳过精排模型时可执行 `docker compose run --rm model-download python -m app.download_embedding_model --skip-reranker`。API 运行期间不会下载模型或调用外部嵌入 API。
+本地语义向量与精排模型不随镜像或 Git 仓库提交。首次使用依次执行 `docker compose build api knowledge-worker model-download`、`docker compose run --rm model-download`、`docker compose up -d api knowledge-worker conversation-summary-worker` 和 `docker compose exec api python -m app.reindex_embeddings`。下载工具会将嵌入模型保存到 `models/bge-small-zh-v1.5`、精排模型保存到 `models/bge-reranker-base`，随后均以只读卷挂载给 API 与 Worker；下载完成后重建指标定义，并从原始文件重新解析结构化知识库片段、向量和词面索引。会话 Worker 使用同一嵌入模型为新历史单元异步补齐向量；未配置或不可用时保留全文召回。它仅在已配置 `LLM_API_KEY` 与 `LLM_MODEL` 时使用同一兼容模型服务压缩摘要，否则自动采用确定性降级。需要暂时跳过精排模型时可执行 `docker compose run --rm model-download python -m app.download_embedding_model --skip-reranker`。API 运行期间不会下载模型或调用外部嵌入 API。
 
 镜像为 CPU 推理预装 PyTorch CPU 轮子，不会安装 CUDA 运行库；如后续需要 GPU 推理，应单独提供 GPU 镜像与 `LOCAL_EMBEDDING_DEVICE` 配置，而不是在默认镜像中混入 CUDA 依赖。
 
@@ -369,17 +377,19 @@ docker compose logs -f
 docker compose logs -f api
 docker compose logs -f frontend
 docker compose logs -f db
+docker compose logs -f conversation-summary-worker
 ```
 
 - `api` 默认输出 Uvicorn 的启动、访问与异常日志。
 - `frontend` 由 Nginx 提供静态页面，通常在浏览器发起请求后输出访问日志。
 - `db` 输出 PostgreSQL 的启动与数据库错误日志。
+- `conversation-summary-worker` 输出短期状态压缩与历史单元向量化任务的启动、完成和失败日志；它不处理前端请求。
 
 健康检查与服务状态可通过 `docker compose ps` 和 `http://localhost:8000/health` 确认。
 
 ## 9. 用户长期记忆
 
-长期记忆采用独立的 `user_memories` 表，以 `user_id` 为隔离边界，不复用 `messages` 或 `conversation_contexts` 存储。它保存用户确认过的偏好，而不是业务事实：
+长期记忆采用独立的 `user_memories` 表，以 `user_id` 为隔离边界，不复用 `messages`、`conversation_contexts` 或同会话 `conversation_summaries` 存储。它保存用户确认过的偏好，而不是业务事实：
 
 - `analysis_preference`：分析习惯，例如复盘时优先按渠道、品类拆分；
 - `answer_preference`：回答呈现偏好，例如结论先行、保持简洁；

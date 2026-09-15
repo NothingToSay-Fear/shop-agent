@@ -16,6 +16,8 @@ from app.services.conversation_context import (
     ConversationContextSnapshot,
     build_retrieval_question,
 )
+from app.services.conversation_summary import ConversationSummaryContext
+from app.services.conversation_history import ConversationHistoryContext
 from app.services.intent_router import RetrievalMode, RetrievalRoute, route_question
 from app.services.query_expansion import prepare_retrieval_queries
 from app.services.user_memory import UserMemoryContext
@@ -47,16 +49,24 @@ class AgentWorkflow:
         conversation_context: ConversationContextSnapshot | None = None,
         user_memory_context: UserMemoryContext | None = None,
         user_id: str | None = None,
+        conversation_summary_context: ConversationSummaryContext | None = None,
+        conversation_history_context: ConversationHistoryContext | None = None,
     ) -> WorkflowResult:
         """先完成并校验执行计划，再允许模型基于受控结果组织回答。"""
         tracker = AgentToolTracker()
         active_context = conversation_context or ConversationContextSnapshot()
         active_memory_context = user_memory_context or UserMemoryContext()
+        active_summary_context = conversation_summary_context or ConversationSummaryContext()
+        active_history_context = conversation_history_context or ConversationHistoryContext()
         retrieval_question = build_retrieval_question(user_input, active_context)
         if active_context.display:
             await self._emit_status(on_status, "context", "正在应用本会话已确认的查询条件…")
         if active_memory_context.items:
             await self._emit_status(on_status, "memory", "正在应用你的长期偏好…")
+        if active_summary_context.used:
+            await self._emit_status(on_status, "summary", "正在恢复本会话短期状态…")
+        if active_history_context.used:
+            await self._emit_status(on_status, "history", "正在补充相关历史讨论…")
         await self._emit_status(on_status, "routing", "正在判断问题类型…")
         # 本轮意图只由用户原始表达判断；会话条件仅用于限定后续真实检索，避免旧条件放大综合意图。
         route = await self._resolve_route(user_input, retrieval_mode)
@@ -99,6 +109,8 @@ class AgentWorkflow:
                     tracker.data_context,
                     active_context.generation_context,
                     active_memory_context.display,
+                    active_summary_context.display,
+                    active_history_context.display,
                 ),
                 tools,
             )

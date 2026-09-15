@@ -26,6 +26,12 @@ class Settings(BaseSettings):
     knowledge_chunk_semantic_similarity_threshold: float = Field(default=0.55, ge=-1, le=1)
     knowledge_index_poll_seconds: float = Field(default=1.0, ge=0.1, le=30.0)
     knowledge_index_max_attempts: int = Field(default=3, ge=1, le=10)
+    conversation_summary_poll_seconds: float = Field(default=1.0, ge=0.1, le=30.0)
+    conversation_summary_max_attempts: int = Field(default=3, ge=1, le=10)
+    conversation_summary_lease_seconds: int = Field(default=300, ge=30, le=3600)
+    conversation_memory_token_budget: int = Field(default=6000, ge=1000, le=20000)
+    conversation_memory_compact_threshold: int = Field(default=4800, ge=800, le=19000)
+    conversation_memory_recent_message_limit: int = Field(default=6, ge=2, le=12)
     web_search_provider: str = "tavily"
     web_search_api_key: str | None = None
     web_search_max_results: int = 5

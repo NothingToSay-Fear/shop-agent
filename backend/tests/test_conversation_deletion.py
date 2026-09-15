@@ -28,7 +28,7 @@ class FakeSession:
 
 @pytest.mark.asyncio
 async def test_delete_conversation_removes_dependent_session_data() -> None:
-    """删除会话必须同时清理消息、短期上下文、候选和运行审计。"""
+    """删除会话必须同时清理消息、短期摘要、候选和运行审计。"""
     session = FakeSession([SimpleNamespace(id="conversation-1"), None])
     user = SimpleNamespace(id="user-1")
 
@@ -37,6 +37,10 @@ async def test_delete_conversation_removes_dependent_session_data() -> None:
     statements = "\n".join(str(statement) for statement in session.statements)
     assert "DELETE FROM tool_calls" in statements
     assert "DELETE FROM user_memory_candidates" in statements
+    assert "DELETE FROM conversation_summary_jobs" in statements
+    assert "DELETE FROM conversation_summaries" in statements
+    assert "DELETE FROM conversation_history_index_jobs" in statements
+    assert "DELETE FROM conversation_history_units" in statements
     assert "DELETE FROM agent_runs" in statements
     assert "DELETE FROM messages" in statements
     assert "DELETE FROM conversation_contexts" in statements
