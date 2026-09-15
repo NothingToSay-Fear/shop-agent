@@ -333,6 +333,8 @@ python -m pytest tests/test_evaluation_suite.py tests/test_evaluation_framework.
 - `LLM_API_KEY`、`LLM_MODEL` 和可选的 `LLM_BASE_URL` 均通过环境变量配置；不预设任何模型。
 - `WEB_SEARCH_API_KEY` 仅用于 Tavily 联网搜索；为空时该工具关闭，不会隐式访问外部网络。公开网页摘要不自动沉淀为知识库。
 - `AUTH_TOKEN_TTL_DAYS` 控制本地登录令牌有效期，默认 `7`；修改后新签发令牌按新期限生效。
+- `USER_MEMORY_FOCUS_DIRECTION_TTL_DAYS` 控制“近期关注方向”未明确指定有效期时的默认保留天数，默认 `90`；到期记录不会进入后续回答生成提示词。
+- `USER_MEMORY_MAX_ACTIVE_RECORDS` 控制单个用户可保留的有效长期记忆上限，默认 `50`；达到上限时，用户需先通过“忘记 …”或“清除所有记忆”释放容量。
 - `CONVERSATION_SUMMARY_POLL_SECONDS`（默认 `1`）控制短期状态压缩 Worker 的空闲轮询间隔；`CONVERSATION_SUMMARY_MAX_ATTEMPTS`（默认 `3`）控制任务异常或 Worker 中断后的最大领取次数；`CONVERSATION_SUMMARY_LEASE_SECONDS`（默认 `300`）是 Worker 领取任务后的租约时长，超时任务会被自动回收。`CONVERSATION_MEMORY_TOKEN_BUDGET`（默认 `6000`）是会话短期状态总预算，`CONVERSATION_MEMORY_COMPACT_THRESHOLD`（默认 `4800`）是触发异步压缩的估算 token 阈值，`CONVERSATION_MEMORY_RECENT_MESSAGE_LIMIT`（默认 `6`）是压缩后最多保留的最近消息数。最近窗口还会受预算约束，避免少量超长消息阻止状态收缩。它们只影响短期状态大小，不会阻塞问答请求。
 - `KNOWLEDGE_UPLOAD_DIR` 默认 `/uploads`，由 Docker 映射为宿主机 `uploads/`；上传原件不写入镜像或数据库临时目录。
 - 当前模型适配器采用 OpenAI 兼容协议，因此可配置支持该协议的模型服务地址和模型名称，而不绑定特定厂商；未配置密钥和模型时启用演示模式。
@@ -394,10 +396,12 @@ docker compose logs -f conversation-summary-worker
 - `analysis_preference`：分析习惯，例如复盘时优先按渠道、品类拆分；
 - `answer_preference`：回答呈现偏好，例如结论先行、保持简洁；
 - `focus_topic`：关注主题，例如大促活动复盘。
+- `work_profile`：稳定工作背景，例如负责美妆品类和直播渠道。
+- `focus_direction`：近期关注方向，例如近期重点关注大促支付转化；默认在 `USER_MEMORY_FOCUS_DIRECTION_TTL_DAYS` 后失效，也可由用户显式指定日期。
 
 不包含指标口径偏好、指标数值、业务数据、完整聊天记录或知识库正文。前端不再提供独立的“我的记忆”管理抽屉；用户可在对话中输入“记住 …”“忘记 …”“清除所有记忆”。显式命令在 `MemoryService` 内直接处理，不调用 Agent、RAG、受控 SQL 或联网搜索。
 
-系统另以 `user_memory_candidates` 保存自然表达产生的 `pending` 候选。普通问答完成并落库后，服务仅根据有限且可解释的偏好句式生成候选；指标和业务数据关键词会被拒绝。候选通过已认证的 `GET /api/memory-candidates` 获取，`POST /api/memory-candidates/{id}/accept` 才会转为 `user_memories`，`dismiss` 只标记忽略。所有读写均带 `user_id = current_user.id`；跨用户 ID 访问统一返回 404。
+系统另以 `user_memory_candidates` 保存自然表达产生的 `pending` 候选。普通问答完成并落库后，服务仅根据有限且可解释的偏好、工作背景和近期关注句式生成候选；指标和业务数据关键词会被拒绝。近期关注候选会携带有效期，到期后不再展示或可被确认。候选通过已认证的 `GET /api/memory-candidates` 获取，`POST /api/memory-candidates/{id}/accept` 才会转为 `user_memories`，`dismiss` 只标记忽略。所有读写均带 `user_id = current_user.id`；跨用户 ID 访问统一返回 404。
 
 ```text
 保存用户消息
@@ -412,11 +416,13 @@ docker compose logs -f conversation-summary-worker
   -> SSE 推送候选，前端在对应回答下方展示“记住 / 暂不”
 ```
 
-对于通常数量很小的用户偏好，首期不引入向量化或额外模型：回答偏好始终优先，分析习惯在“分析、复盘、对比、诊断、原因、建议、优化”等问题中优先，关注主题按文本命中和最近更新时间排序。候选提取同样采用有限规则，而非调用模型，避免为一次偏好确认额外增加时延、费用或误存风险。
+对于通常数量很小的用户记忆，首期不引入向量化或额外模型：回答偏好始终优先，分析习惯在“分析、复盘、对比、诊断、原因、建议、优化”等问题中优先，稳定工作背景与未过期的近期关注方向次之，旧版关注主题按文本命中和最近更新时间排序。候选提取同样采用有限规则，而非调用模型，避免为一次偏好确认额外增加时延、费用或误存风险。
 
 `PromptBuilder` 明确约束长期偏好只能影响回答呈现、分析角度或建议优先级，不能覆盖本轮问题、会话活动/时间/指标条件，更不能作为业务事实、数据或指标口径。即使使用长期记忆，受控 SQL、指标 RAG 与知识库 RAG 的检索入参都不会改变。
 
 `agent_runs.memory_summary` 只保存“采用了几条长期记忆”，`memory_ids` 保存本轮采用的记录 ID；记忆正文仍只保留在用户自己的 `user_memories.content`。运行审计的 15 天清理不会删除长期记忆；用户删除记忆后，历史运行记录仍可保留其 ID 以便复盘。`user_memory_candidates` 是待确认交互记录，不参与召回；“清除所有记忆”会同时忽略仍待确认的候选。
+
+长期记忆治理采用“用户显式更新优先”的策略：`更新工作背景：…` 或 `更新近期关注：…` 会将同类型 `active` 记录标记为 `superseded`，新记录才会继续参与回答。每个用户有效记忆默认上限为 `50`，到期记录在读取或写入前惰性标记为 `expired`。手机号、邮箱、证件号、密码、密钥和令牌会被拒绝写入或生成候选。`user_memory_events` 保存创建、确认、替代、过期和删除事件，以及候选/会话/消息定位 ID；不保存记忆正文或原始对话。`agent_runs.memory_selection` 记录本轮采用的类型与可解释原因，用于观测召回质量。
 
 ## 8. 后续演进
 

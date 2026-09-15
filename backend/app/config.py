@@ -32,6 +32,8 @@ class Settings(BaseSettings):
     conversation_memory_token_budget: int = Field(default=6000, ge=1000, le=20000)
     conversation_memory_compact_threshold: int = Field(default=4800, ge=800, le=19000)
     conversation_memory_recent_message_limit: int = Field(default=6, ge=2, le=12)
+    user_memory_focus_direction_ttl_days: int = Field(default=90, ge=7, le=365)
+    user_memory_max_active_records: int = Field(default=50, ge=5, le=500)
     web_search_provider: str = "tavily"
     web_search_api_key: str | None = None
     web_search_max_results: int = 5

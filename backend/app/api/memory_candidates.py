@@ -1,7 +1,9 @@
 """用户在会话中确认或忽略长期记忆候选的接口。"""
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+from datetime import UTC, datetime
+
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_session
@@ -31,6 +33,7 @@ async def list_memory_candidates(
     statement = select(UserMemoryCandidate).where(
         UserMemoryCandidate.user_id == current_user.id,
         UserMemoryCandidate.status == "pending",
+        or_(UserMemoryCandidate.expires_at.is_(None), UserMemoryCandidate.expires_at > datetime.now(UTC)),
     )
     if conversation_id is not None:
         statement = statement.where(UserMemoryCandidate.conversation_id == conversation_id)
@@ -46,7 +49,10 @@ async def accept_memory_candidate(
 ) -> None:
     """仅在用户明确点击后，才把候选写入可被 Agent 使用的记忆表。"""
     candidate = await _get_pending_candidate(candidate_id, current_user.id, session)
-    await MemoryService.accept_candidate(session, candidate)
+    try:
+        await MemoryService.accept_candidate(session, candidate)
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
     await session.commit()
 
 
@@ -71,6 +77,7 @@ async def _get_pending_candidate(
             UserMemoryCandidate.id == candidate_id,
             UserMemoryCandidate.user_id == user_id,
             UserMemoryCandidate.status == "pending",
+            or_(UserMemoryCandidate.expires_at.is_(None), UserMemoryCandidate.expires_at > datetime.now(UTC)),
         )
     )
     if candidate is None:

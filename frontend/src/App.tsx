@@ -56,6 +56,8 @@ const memoryTypeOptions: { value: MemoryCandidate["memory_type"]; label: string 
   { value: "analysis_preference", label: "分析习惯" },
   { value: "answer_preference", label: "回答偏好" },
   { value: "focus_topic", label: "关注主题" },
+  { value: "work_profile", label: "工作背景" },
+  { value: "focus_direction", label: "近期关注" },
 ];
 
 function memoryTypeLabel(memoryType: MemoryCandidate["memory_type"]) {
@@ -667,7 +669,8 @@ export function App() {
                   {candidate && (
                     <section className="memory-candidate">
                       <Typography.Text type="secondary">
-                        检测到你可能希望长期保留这项偏好：{candidate.content}
+                        检测到你可能希望长期保留：{candidate.content}
+                        {candidate.expires_at && `（有效至 ${new Date(candidate.expires_at).toLocaleDateString("zh-CN")}）`}
                       </Typography.Text>
                       <Space size={8}>
                         <Button

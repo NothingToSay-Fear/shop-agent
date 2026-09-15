@@ -92,10 +92,33 @@ class UserMemoryCandidate(Base):
     content: Mapped[str] = mapped_column(Text, nullable=False)
     confidence: Mapped[Decimal] = mapped_column(Numeric(3, 2), nullable=False, default=Decimal("0.85"))
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending", index=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class UserMemoryEvent(Base):
+    """长期记忆的最小化生命周期审计，不复制记忆正文或原始对话。"""
+
+    __tablename__ = "user_memory_events"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    # 不设外键：用户删除记忆后仍保留不含正文的删除审计事件。
+    memory_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    event_type: Mapped[str] = mapped_column(String(30), nullable=False, index=True)
+    source: Mapped[str] = mapped_column(String(30), nullable=False)
+    candidate_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    conversation_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    message_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    details: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
 
 
 class Conversation(Base, TimestampMixin):
@@ -396,6 +419,7 @@ class AgentRun(Base):
     conversation_history_used: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     memory_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     memory_ids: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    memory_selection: Mapped[list[dict[str, str]]] = mapped_column(JSON, nullable=False, default=list)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="running")
     answer_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     reference_ids: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)

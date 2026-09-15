@@ -6,7 +6,13 @@ from typing import Literal
 from pydantic import BaseModel
 
 
-MemoryType = Literal["analysis_preference", "answer_preference", "focus_topic"]
+MemoryType = Literal[
+    "analysis_preference",
+    "answer_preference",
+    "focus_topic",
+    "work_profile",
+    "focus_direction",
+]
 class UserMemoryCandidateRead(BaseModel):
     """仅返回当前用户仍可确认的候选，不暴露已生效记忆的管理入口。"""
 
@@ -17,6 +23,7 @@ class UserMemoryCandidateRead(BaseModel):
     source_message_id: str
     agent_message_id: str
     confidence: float
+    expires_at: datetime | None
     created_at: datetime
 
     model_config = {"from_attributes": True}

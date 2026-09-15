@@ -190,7 +190,7 @@ async def create_message(
         conversation.title = payload.content[:40]
     await session.commit()
     command_result = await MemoryService.handle_explicit_command(
-        session, current_user.id, payload.content
+        session, current_user.id, payload.content, conversation_id, user_message.id
     )
     if command_result is not None:
         return StreamingResponse(
@@ -221,6 +221,7 @@ async def create_message(
         context_snapshot=context_result.snapshot.as_audit_snapshot(),
         memory_summary=memory_context.audit_summary,
         memory_ids=memory_context.ids,
+        memory_selection=memory_context.audit_selection,
         conversation_summary_version=summary_context.version,
         conversation_summary_used=summary_context.used,
         conversation_history_ids=list(history_context.unit_ids),
@@ -319,6 +320,7 @@ async def create_message(
                             "memory_type": candidate.memory_type,
                             "content": candidate.content,
                             "confidence": float(candidate.confidence),
+                            "expires_at": candidate.expires_at.isoformat() if candidate.expires_at else None,
                             "created_at": candidate.created_at.isoformat(),
                         }
                     },
@@ -375,6 +377,7 @@ async def get_message_audit(
         context_snapshot=run.context_snapshot,
         memory_summary=run.memory_summary,
         memory_ids=run.memory_ids,
+        memory_selection=run.memory_selection,
         conversation_summary_version=run.conversation_summary_version,
         conversation_summary_used=run.conversation_summary_used,
         conversation_history_ids=run.conversation_history_ids,

@@ -7,7 +7,10 @@ from app.services.intent_router import RetrievalRoute
 from app.services.user_memory import (
     MemoryItem,
     UserMemoryContext,
+    _default_expiry,
+    _parse_remember_content,
     _select_relevant_memories,
+    _contains_sensitive_content,
     extract_memory_candidate,
 )
 
@@ -38,6 +41,37 @@ def test_memory_candidate_requires_preference_expression() -> None:
     assert candidate is not None
     assert candidate.memory_type == "analysis_preference"
     assert candidate.content == "复盘时优先按渠道和品类拆分"
+
+
+def test_memory_candidate_supports_stable_work_profile_and_expiring_focus_direction() -> None:
+    """工作背景需要确认后长期采用，近期关注方向默认具备有限生命周期。"""
+    profile = extract_memory_candidate("我主要负责美妆品类和直播渠道")
+    focus = extract_memory_candidate("近期重点关注大促期间的支付转化")
+
+    assert profile is not None
+    assert profile.memory_type == "work_profile"
+    assert profile.content == "负责美妆品类和直播渠道"
+    assert focus is not None
+    assert focus.memory_type == "focus_direction"
+    assert focus.content == "重点关注大促期间的支付转化"
+    assert _default_expiry("work_profile") is None
+    assert _default_expiry("focus_direction") is not None
+
+
+def test_explicit_memory_can_set_an_expiry_date() -> None:
+    """用户可用明确日期覆盖近期关注方向的默认有效期。"""
+    parsed = _parse_remember_content("到 2099-12-31：近期重点关注直播转化")
+
+    assert parsed.error_message is None
+    assert parsed.content == "近期重点关注直播转化"
+    assert parsed.expires_at is not None
+    assert parsed.expires_at.date().isoformat() == "2099-12-31"
+
+
+def test_memory_candidate_rejects_sensitive_content() -> None:
+    """长期记忆不能将联系方式或凭据类信息沉淀为跨会话上下文。"""
+    assert _contains_sensitive_content("联系电话是 13812345678") is True
+    assert extract_memory_candidate("我负责团队，邮箱是 ops@example.com") is None
 
 
 def test_memory_retrieval_prioritizes_answer_and_relevant_analysis_preferences() -> None:

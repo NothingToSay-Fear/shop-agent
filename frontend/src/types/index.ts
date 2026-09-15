@@ -20,7 +20,12 @@ export interface AuthSession {
   user: AuthUser;
 }
 
-export type UserMemoryType = "analysis_preference" | "answer_preference" | "focus_topic";
+export type UserMemoryType =
+  | "analysis_preference"
+  | "answer_preference"
+  | "focus_topic"
+  | "work_profile"
+  | "focus_direction";
 
 export interface MemoryCandidate {
   id: string;
@@ -30,6 +35,7 @@ export interface MemoryCandidate {
   memory_type: UserMemoryType;
   content: string;
   confidence: number;
+  expires_at: string | null;
   created_at: string;
 }
 
@@ -65,6 +71,7 @@ export interface AgentRunAudit {
   context_snapshot: Record<string, unknown>;
   memory_summary: string | null;
   memory_ids: string[];
+  memory_selection: Array<{ memory_id: string; memory_type: string; reason: string }>;
   conversation_summary_version: number | null;
   conversation_summary_used: boolean;
   conversation_history_ids: string[];
