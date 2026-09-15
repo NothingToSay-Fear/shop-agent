@@ -34,6 +34,7 @@ import {
 } from "antd";
 
 import { api } from "./lib/api";
+import { MessageContent } from "./components/MessageContent";
 import type {
   AgentRunAudit,
   AuthUser,
@@ -654,7 +655,11 @@ export function App() {
                   {item.id === "streaming" && (
                     <div className="message-progress"><Spin size="small" /> {streamingStatus || "正在处理…"}</div>
                   )}
-                  <div className="message-body">{item.content || (item.id === "streaming" ? "" : "正在思考…")}</div>
+                  <div className="message-body">
+                    {item.sender_type === "agent"
+                      ? <MessageContent content={item.content || (item.id === "streaming" ? "" : "正在思考…")} />
+                      : item.content}
+                  </div>
                   {item.sender_type === "agent" && item.data_references && (
                     <Typography.Text type="secondary" className="message-reference">
                       依据：{item.data_references}
