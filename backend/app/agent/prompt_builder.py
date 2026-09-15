@@ -39,6 +39,8 @@ class PromptBuilder:
             f"系统已按 `{plan.route_mode}` 路由完成受控执行计划：{plan.summary}。\n"
             "不要重复调用 query_metric_rag、query_knowledge_rag 或 search_web；它们本轮的真实执行次数已受限。"
             "只能基于以下已验证的工具结果陈述数据、资料或外部事实；缺少依据时应明确说明。\n\n"
+            "若受控指标结果含有“【天数不等提示】”，不得依据两段总量的差异或比例下涨跌结论；"
+            "应明确说明统计天数不同，并仅以受控结果给出的日均值、比率类指标或其他同口径数据解释趋势。\n"
             f"{data_context or '本轮没有检索到可用受控上下文。'}"
         )
 

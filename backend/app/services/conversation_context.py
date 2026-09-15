@@ -108,13 +108,14 @@ async def build_and_persist_context(
     conversation_id: str,
     source_message_id: str,
     question: str,
+    reset_time_range: bool = False,
 ) -> ContextBuildResult:
     """读取会话状态，合并本轮明确条件，并在用户消息入库后立即持久化。"""
     record = await session.get(ConversationContext, conversation_id)
     previous = _snapshot_from_record(record)
     metric_hints = await _load_metric_hints(session)
     result = build_context_snapshot(
-        previous, question, source_message_id, metric_hints
+        previous, question, source_message_id, metric_hints, reset_time_range
     )
     if record is None:
         record = ConversationContext(conversation_id=conversation_id)
@@ -128,6 +129,7 @@ def build_context_snapshot(
     question: str,
     source_message_id: str,
     metric_hints: Iterable[MetricHint] = DEFAULT_METRIC_HINTS,
+    reset_time_range: bool = False,
 ) -> ContextBuildResult:
     """以确定性规则合并条件；未出现的字段只继承，不由模型推测。"""
     values = {
@@ -139,6 +141,10 @@ def build_context_snapshot(
     }
     sources = dict(previous.field_sources or {})
     explicit = _extract_explicit_conditions(question, metric_hints)
+    if reset_time_range and "start_date" not in explicit:
+        # 时间解释由受限服务完成；此处只执行其已确认的“不要继承旧范围”决定。
+        explicit["start_date"] = None
+        explicit["end_date"] = None
     updated_fields: list[str] = []
     cleared_fields: list[str] = []
     for field_name, value in explicit.items():

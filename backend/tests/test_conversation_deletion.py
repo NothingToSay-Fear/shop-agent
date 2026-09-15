@@ -44,6 +44,7 @@ async def test_delete_conversation_removes_dependent_session_data() -> None:
     assert "DELETE FROM agent_runs" in statements
     assert "DELETE FROM messages" in statements
     assert "DELETE FROM conversation_contexts" in statements
+    assert "DELETE FROM conversation_tasks" in statements
     assert "DELETE FROM conversations" in statements
     assert session.committed is True
 

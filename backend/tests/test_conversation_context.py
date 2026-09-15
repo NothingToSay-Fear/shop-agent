@@ -77,6 +77,26 @@ def test_short_date_range_overrides_old_activity_without_leaving_conflicting_lab
     assert "活动" in result.cleared_fields
 
 
+def test_temporal_resolution_can_clear_inherited_date_range() -> None:
+    """只有受限时间解析确认需要新范围时，才清除旧周区间。"""
+    previous = ConversationContextSnapshot(
+        start_date=date(2026, 9, 9),
+        end_date=date(2026, 9, 15),
+        metric_hints=("支付 GMV",),
+    )
+
+    result = build_context_snapshot(
+        previous,
+        "比较一下上个月和这个月的 GMV",
+        "message-relative-month",
+        reset_time_range=True,
+    )
+
+    assert result.snapshot.start_date is None
+    assert result.snapshot.end_date is None
+    assert "时间范围" in result.cleared_fields
+
+
 def test_date_range_parser_accepts_common_operator_formats() -> None:
     """上下文与指标服务共享常见日期写法。"""
     assert parse_explicit_date_range("8/16–8/22") == (date(2026, 8, 16), date(2026, 8, 22))

@@ -9,6 +9,7 @@ from sqlalchemy import delete, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent.operation_agent import OperationAgent
+from app.agent.tools import AgentToolTracker
 from app.agent.execution_plan import build_execution_plan_for_mode
 from app.database import get_session
 from app.models import (
@@ -19,6 +20,7 @@ from app.models import (
     ConversationHistoryUnit,
     ConversationSummary,
     ConversationSummaryJob,
+    ConversationTask,
     Message,
     ToolCall,
     User,
@@ -40,7 +42,7 @@ from app.services.agent_audit import (
     persist_tool_calls,
     update_run_route,
 )
-from app.services.conversation_context import build_and_persist_context
+from app.services.conversation_context import ContextBuildResult, build_and_persist_context
 from app.services.conversation_history import (
     enqueue_history_unit_after_turn,
     retrieve_history_for_generation,
@@ -48,6 +50,11 @@ from app.services.conversation_history import (
 from app.services.conversation_summary import (
     retrieve_summary_for_generation,
     update_memory_state_after_turn,
+)
+from app.services.conversation_tasks import (
+    cancel_open_conversation_tasks,
+    complete_conversation_task,
+    prepare_conversation_task,
 )
 from app.services.authentication import get_current_user
 from app.services.user_memory import MemoryService
@@ -150,6 +157,9 @@ async def delete_conversation(
         delete(ConversationContext).where(ConversationContext.conversation_id == conversation_id)
     )
     await session.execute(
+        delete(ConversationTask).where(ConversationTask.conversation_id == conversation_id)
+    )
+    await session.execute(
         delete(Conversation).where(
             Conversation.id == conversation_id, Conversation.user_id == current_user.id
         )
@@ -168,7 +178,8 @@ async def reset_conversation_context(
     context = await session.get(ConversationContext, conversation_id)
     if context is not None:
         await session.delete(context)
-        await session.commit()
+    await cancel_open_conversation_tasks(session, conversation_id)
+    await session.commit()
 
 
 @router.post("/{conversation_id}/messages")
@@ -198,12 +209,28 @@ async def create_message(
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache"},
         )
+    task_turn = await prepare_conversation_task(
+        session, conversation_id, user_message.id, payload.content
+    )
     context_result = await build_and_persist_context(
         session,
         conversation_id,
         user_message.id,
         payload.content,
+        reset_time_range=task_turn.temporal_resolution.resets_inherited_range,
     )
+    if task_turn.requires_clarification:
+        return StreamingResponse(
+            _task_clarification_event_stream(
+                session,
+                conversation_id,
+                user_message.id,
+                context_result,
+                task_turn.clarification or "请补充必要条件。",
+            ),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache"},
+        )
     memory_context = await MemoryService.retrieve_for_query(session, current_user.id, payload.content)
     await MemoryService.record_context_usage(session, current_user.id, memory_context)
     summary_context = await retrieve_summary_for_generation(session, conversation_id)
@@ -238,13 +265,14 @@ async def create_message(
         full_answer = ""
         try:
             async for event in agent.stream_events(
-                payload.content,
+                task_turn.effective_question,
                 retrieval_mode=payload.mode,
                 conversation_context=context_result.snapshot,
                 user_memory_context=memory_context,
                 user_id=current_user.id,
                 conversation_summary_context=summary_context,
                 conversation_history_context=history_context,
+                route_override=task_turn.route_override,
             ):
                 if event.event_type == "status":
                     yield _event("status", {"content": event.content, "phase": event.phase or ""})
@@ -262,6 +290,7 @@ async def create_message(
             await session.flush()
             if agent.tool_tracker.route is not None:
                 update_run_route(run, agent.tool_tracker.route)
+            await complete_conversation_task(task_turn.task, agent.tool_tracker.route)
             run.agent_message_id = agent_message.id
             complete_run(run, full_answer, agent.tool_tracker, started_at)
             persist_tool_calls(session, run, agent_message.id, agent.tool_tracker.tool_calls)
@@ -431,6 +460,42 @@ async def _memory_command_event_stream(
     )
     session.add(agent_message)
     await session.commit()
+    yield _event("chunk", {"content": response})
+    yield _event("done", {"message_id": agent_message.id})
+
+
+async def _task_clarification_event_stream(
+    session: AsyncSession,
+    conversation_id: str,
+    user_message_id: str,
+    context_result: ContextBuildResult,
+    response: str,
+):
+    """把受控的任务补充请求作为普通回答持久化，不提前执行不完整的 RAG 查询。"""
+    # 追问也是一条可追溯的 Agent 输出，但没有执行任何检索工具。
+    run = AgentRun(
+        conversation_id=conversation_id,
+        user_message_id=user_message_id,
+        question_summary="等待补充条件的会话任务",
+        route_mode="task_clarification",
+        context_summary=context_result.audit_summary,
+        context_actions=list(context_result.audit_actions),
+        context_snapshot=context_result.snapshot.as_audit_snapshot(),
+    )
+    session.add(run)
+    agent_message = Message(
+        conversation_id=conversation_id,
+        sender_type="agent",
+        content=response,
+        data_references="会话任务状态：等待用户补充条件",
+        status="task_clarification",
+    )
+    session.add(agent_message)
+    await session.flush()
+    run.agent_message_id = agent_message.id
+    complete_run(run, response, AgentToolTracker(), perf_counter())
+    await session.commit()
+    yield _event("status", {"content": "正在等待补充当前任务所需条件…", "phase": "task"})
     yield _event("chunk", {"content": response})
     yield _event("done", {"message_id": agent_message.id})
 

@@ -323,7 +323,16 @@ async def query_metrics_for_question(
     if len(plan.units) > 1:
         lines.append("【区间对比】")
         baseline_unit, baseline_values = plan.units[0], values_by_unit[0]
+        baseline_days = _unit_days(baseline_unit)
         for unit, values in zip(plan.units[1:], values_by_unit[1:], strict=True):
+            compared_days = _unit_days(unit)
+            unequal_days = baseline_days != compared_days
+            if unequal_days:
+                lines.append(
+                    f"【天数不等提示】{baseline_unit.label}共 {baseline_days} 天，"
+                    f"{unit.label}共 {compared_days} 天；总量仅用于规模参考，"
+                    "可比趋势请以日均值为准。"
+                )
             for definition in requested_definitions:
                 lines.append(
                     _format_unit_comparison(
@@ -332,8 +341,25 @@ async def query_metrics_for_question(
                         baseline_values.get(definition.metric_code, 0.0),
                         unit,
                         values.get(definition.metric_code, 0.0),
+                        unequal_days,
                     )
                 )
+                if unequal_days and definition.metric_code not in {
+                    "conversion_rate",
+                    "refund_rate",
+                    "average_order_value",
+                }:
+                    lines.append(
+                        _format_daily_average_comparison(
+                            definition,
+                            baseline_unit,
+                            baseline_values.get(definition.metric_code, 0.0),
+                            baseline_days,
+                            unit,
+                            values.get(definition.metric_code, 0.0),
+                            compared_days,
+                        )
+                    )
     return MetricQueryContext(
         text="\n".join(lines),
         metric_codes=tuple(requested_codes),
@@ -495,13 +521,7 @@ async def _resolve_period(session: AsyncSession, question: str) -> tuple[date, d
     )
     if latest_date is None:
         return None
-    lowered = question.lower()
-    if any(text_value in lowered for text_value in ("最近14天", "近14天", "两周")):
-        return latest_date - timedelta(days=13), latest_date
-    if "上周" in lowered:
-        return latest_date - timedelta(days=13), latest_date - timedelta(days=7)
     return latest_date - timedelta(days=6), latest_date
-
 
 def _parse_explicit_date_range(question: str) -> tuple[date, date] | None:
     """兼容既有调用方；实际解析由统一日期模块完成。"""
@@ -539,6 +559,7 @@ def _format_unit_comparison(
     baseline_value: float,
     compared_unit: MetricQueryUnit,
     compared_value: float,
+    unequal_days: bool = False,
 ) -> str:
     """输出透明的确定性区间差异，归因和建议仍交由基于依据的回答层完成。"""
     change = compared_value - baseline_value
@@ -552,10 +573,40 @@ def _format_unit_comparison(
         ratio_text = f"（{ratio:+.2%}）"
     else:
         ratio_text = "（基准值为 0，无法计算比例变化）"
+    suffix = "（统计天数不同，总量不作为可比涨跌结论）" if unequal_days else ""
     return (
         f"{compared_unit.label} 相比 {baseline_unit.label}，{definition.name} "
+        f"变化 {_format_value(definition.metric_code, change)}{ratio_text}。{suffix}"
+    )
+
+
+def _format_daily_average_comparison(
+    definition: MetricDefinition,
+    baseline_unit: MetricQueryUnit,
+    baseline_value: float,
+    baseline_days: int,
+    compared_unit: MetricQueryUnit,
+    compared_value: float,
+    compared_days: int,
+) -> str:
+    """当区间天数不等时，补充日均值变化，避免模型把整月和月累计的总量混为同口径。"""
+    baseline_average = baseline_value / baseline_days
+    compared_average = compared_value / compared_days
+    change = compared_average - baseline_average
+    if baseline_average:
+        ratio_text = f"（{change / baseline_average:+.2%}）"
+    else:
+        ratio_text = "（基准日均值为 0，无法计算比例变化）"
+    return (
+        f"日均{definition.name}：{compared_unit.label} {_format_value(definition.metric_code, compared_average)}，"
+        f"{baseline_unit.label} {_format_value(definition.metric_code, baseline_average)}，"
         f"变化 {_format_value(definition.metric_code, change)}{ratio_text}。"
     )
+
+
+def _unit_days(unit: MetricQueryUnit) -> int:
+    """查询单元均为闭区间，天数用于判断总量是否可以直接比较。"""
+    return (unit.end_date - unit.start_date).days + 1
 
 
 def _format_value(metric_code: str, value: float) -> str:

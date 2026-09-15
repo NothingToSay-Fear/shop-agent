@@ -51,6 +51,7 @@ class AgentWorkflow:
         user_id: str | None = None,
         conversation_summary_context: ConversationSummaryContext | None = None,
         conversation_history_context: ConversationHistoryContext | None = None,
+        route_override: RetrievalRoute | None = None,
     ) -> WorkflowResult:
         """先完成并校验执行计划，再允许模型基于受控结果组织回答。"""
         tracker = AgentToolTracker()
@@ -69,7 +70,11 @@ class AgentWorkflow:
             await self._emit_status(on_status, "history", "正在补充相关历史讨论…")
         await self._emit_status(on_status, "routing", "正在判断问题类型…")
         # 本轮意图只由用户原始表达判断；会话条件仅用于限定后续真实检索，避免旧条件放大综合意图。
-        route = await self._resolve_route(user_input, retrieval_mode)
+        route = (
+            route_override
+            if route_override is not None
+            else await self._resolve_route(user_input, retrieval_mode)
+        )
         tracker.set_route(route)
         plan = build_execution_plan(route)
         prepared_queries = None
@@ -134,7 +139,9 @@ class AgentWorkflow:
         )
 
     async def _resolve_route(
-        self, user_input: str, retrieval_mode: RetrievalMode
+        self,
+        user_input: str,
+        retrieval_mode: RetrievalMode,
     ) -> RetrievalRoute:
         """显式模式优先；默认模式由本地语义路由选择需要的工具。"""
         if retrieval_mode != "hybrid":

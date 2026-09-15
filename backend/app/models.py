@@ -148,6 +148,24 @@ class ConversationContext(Base, TimestampMixin):
     field_sources: Mapped[dict[str, str]] = mapped_column(JSON, nullable=False, default=dict)
 
 
+class ConversationTask(Base, TimestampMixin):
+    """会话内可持续补充的任务状态，不将短期记忆或历史回答当作当前查询事实。"""
+
+    __tablename__ = "conversation_tasks"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    conversation_id: Mapped[str] = mapped_column(
+        ForeignKey("conversations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    task_type: Mapped[str] = mapped_column(String(30), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(30), nullable=False, index=True)
+    route_mode: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    task_frame: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False, default=dict)
+    missing_slots: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    source_message_ids: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class ConversationSummary(Base, TimestampMixin):
     """同会话短期状态：压缩摘要与有限最近窗口，不能替代受控检索依据。"""
 
