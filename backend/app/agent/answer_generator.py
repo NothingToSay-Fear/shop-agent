@@ -8,7 +8,6 @@ from collections.abc import Sequence
 from langchain_core.tools import BaseTool
 
 from app.agent.prompt_builder import BASE_SYSTEM_PROMPT, PromptBuilder
-from app.agent.review_agent import build_general_subagent, build_review_subagent
 from app.config import Settings
 
 logger = logging.getLogger(__name__)
@@ -25,10 +24,11 @@ class AnswerGenerator:
         user_input: str,
         orchestration_context: str | None,
         tools: Sequence[BaseTool],
+        use_review_agent: bool = False,
     ) -> str | None:
         """调用受限 DeepAgent；异常由调用方返回同轮已验证证据。"""
         try:
-            return await self._deep_agent_answer(user_input, orchestration_context, tools)
+            return await self._deep_agent_answer(user_input, orchestration_context, tools, use_review_agent)
         except Exception:
             logger.exception("模型回答生成失败，将仅返回已验证的受控工具证据。")
             return None
@@ -38,6 +38,7 @@ class AnswerGenerator:
         user_input: str,
         orchestration_context: str | None,
         tools: Sequence[BaseTool],
+        use_review_agent: bool,
     ) -> str:
         """创建最小权限 DeepAgent 并返回最后一条模型消息。"""
         from deepagents import create_deep_agent
@@ -56,7 +57,8 @@ class AnswerGenerator:
         agent = create_deep_agent(
             model=model,
             tools=list(tools),
-            subagents=[build_general_subagent(tools), build_review_subagent(tools)],
+            # 子 Agent 由主工作流显式委派；生成器不再交给 DeepAgent 自行选择子 Agent。
+            subagents=[],
             # 覆盖框架默认文件系统中间件，只保留其要求的只读能力。
             middleware=[FilesystemMiddleware(tools=["read_file"])],
             system_prompt=BASE_SYSTEM_PROMPT + PromptBuilder.tool_orchestration_prompt(),

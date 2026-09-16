@@ -4,13 +4,17 @@ import pytest
 from app.models import ConversationTask
 from app.services.conversation_tasks import (
     TASK_COMPLETED,
+    TASK_HYBRID_ANALYSIS,
     TASK_KNOWLEDGE_QA,
     TASK_METRIC_COMPARISON,
+    TASK_READY,
+    TASK_REVIEW,
     TASK_WAITING_CLARIFICATION,
     _continue_completed_task,
     prepare_conversation_task,
 )
 from app.services.metric_rag import build_metric_query_plan
+from app.services.activity_periods import resolve_activity_periods
 from app.services.task_interpreter import TaskRelationshipDecision, _fallback_decision, _parse_decision
 from app.services.temporal_interpreter import TemporalResolution
 
@@ -69,6 +73,18 @@ def _controlled_temporal_resolution(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr("app.services.conversation_tasks.resolve_temporal_intent", _resolve)
 
+    async def _driver_graph(_session: object) -> dict[str, tuple[str, ...]]:
+        return {
+            "paid_gmv": (
+                "paid_order_count",
+                "visitor_count",
+                "conversion_rate",
+                "average_order_value",
+            )
+        }
+
+    monkeypatch.setattr("app.services.conversation_tasks.load_metric_analysis_driver_graph", _driver_graph)
+
 
 @pytest.mark.asyncio
 async def test_metric_comparison_waits_for_range_without_querying_partial_data() -> None:
@@ -83,6 +99,66 @@ async def test_metric_comparison_waits_for_range_without_querying_partial_data()
     assert turn.task.task_type == TASK_METRIC_COMPARISON
     assert turn.task.status == TASK_WAITING_CLARIFICATION
     assert turn.task.missing_slots == ["时间范围或数据类型"]
+
+
+@pytest.mark.asyncio
+async def test_causal_metric_comparison_is_an_analysis_task_with_driver_metrics() -> None:
+    session = _TaskSession([None, None])
+
+    turn = await prepare_conversation_task(
+        session, "conversation-1", "message-1", "为什么本周 GMV 比上周低"
+    )
+
+    assert turn.task.task_type == TASK_HYBRID_ANALYSIS
+    assert turn.task.effective_constraints["analysis_goal"] == "经营归因"
+    assert turn.task.effective_constraints["data_query_plan"]["metric_codes"] == [
+        "paid_gmv",
+        "paid_order_count",
+        "visitor_count",
+        "conversion_rate",
+        "average_order_value",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_causal_follow_up_upgrades_a_completed_metric_comparison(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    task = ConversationTask(
+        conversation_id="conversation-1",
+        task_type=TASK_METRIC_COMPARISON,
+        status=TASK_COMPLETED,
+        route_mode="metrics",
+        revision=1,
+        task_frame={"base_question": "本周 GMV 比上周低", "supplements": []},
+        effective_constraints={"metrics": ["paid_gmv"]},
+        missing_slots=[],
+        source_message_ids=["message-1"],
+    )
+
+    async def _continue(*_args: object, **_kwargs: object) -> TaskRelationshipDecision:
+        return TaskRelationshipDecision("continue", (), 0.95, "延续同一指标范围", "llm")
+
+    async def _no_time(*_args: object, **_kwargs: object) -> TemporalResolution:
+        return TemporalResolution("no_time", source="local_gate")
+
+    monkeypatch.setattr("app.services.conversation_tasks.interpret_task_relationship", _continue)
+    monkeypatch.setattr("app.services.conversation_tasks.resolve_temporal_intent", _no_time)
+    session = _TaskSession([None, task])
+
+    turn = await prepare_conversation_task(
+        session, "conversation-1", "message-2", "为什么会低"
+    )
+
+    assert turn.task.task_type == TASK_HYBRID_ANALYSIS
+    assert turn.task.route_mode == "hybrid"
+    assert turn.task.effective_constraints["data_query_plan"]["metric_codes"] == [
+        "paid_gmv",
+        "paid_order_count",
+        "visitor_count",
+        "conversion_rate",
+        "average_order_value",
+    ]
 
 
 @pytest.mark.asyncio
@@ -139,7 +215,8 @@ async def test_completed_legacy_month_task_without_periods_is_rebuilt_on_retry(
     )
     plan = build_metric_query_plan(turn.effective_question)
 
-    assert legacy_task.status == "superseded"
+    assert legacy_task.status == TASK_READY
+    assert legacy_task.revision == 2
     assert [(unit.start_date, unit.end_date) for unit in plan.units] == [
         (date(2026, 8, 1), date(2026, 8, 31)),
         (date(2026, 9, 1), date(2026, 9, 15)),
@@ -273,7 +350,8 @@ async def test_date_clarification_rebuilds_one_controlled_two_period_query_plan(
     plan = build_metric_query_plan(turn.effective_question)
 
     assert turn.requires_clarification is False
-    assert task.status == "superseded"
+    assert task.status == TASK_READY
+    assert task.revision == 2
     assert [(unit.start_date, unit.end_date) for unit in plan.units] == [
         (date(2026, 9, 2), date(2026, 9, 8)),
         (date(2026, 9, 9), date(2026, 9, 15)),
@@ -301,3 +379,54 @@ def test_knowledge_follow_up_reuses_task_goal_but_requires_fresh_retrieval() -> 
     assert "只看 618 正式期的资料" in turn.effective_question
     assert turn.route_override is not None
     assert turn.route_override.mode == "knowledge"
+
+
+def test_registered_activities_resolve_in_user_order() -> None:
+    periods = resolve_activity_periods("比较七夕活动和618活动的 GMV")
+
+    assert [label for label, _, _ in periods] == ["七夕", "618"]
+    assert [(start, end) for _, start, end in periods] == [
+        (date(2026, 8, 10), date(2026, 8, 22)),
+        (date(2026, 6, 1), date(2026, 6, 20)),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_revise_keeps_confirmed_period_when_current_turn_needs_no_time_change(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    task = ConversationTask(
+        conversation_id="conversation-1",
+        task_type=TASK_REVIEW,
+        status=TASK_COMPLETED,
+        route_mode="hybrid",
+        revision=1,
+        task_frame={"base_question": "复盘 618 活动", "supplements": []},
+        effective_constraints={
+            "periods": [{"label": "618", "start_date": "2026-06-01", "end_date": "2026-06-20"}]
+        },
+        missing_slots=[],
+        source_message_ids=["message-1"],
+    )
+
+    async def _revise(*_args: object, **_kwargs: object) -> TaskRelationshipDecision:
+        return TaskRelationshipDecision("revise", ("analysis_goal",), 0.95, "修改分析重点", "llm")
+
+    async def _clarify(*_args: object, **_kwargs: object) -> TemporalResolution:
+        return TemporalResolution("clarify", clarification="请确认日期范围", source="llm")
+
+    monkeypatch.setattr("app.services.conversation_tasks.interpret_task_relationship", _revise)
+    monkeypatch.setattr("app.services.conversation_tasks.resolve_temporal_intent", _clarify)
+    session = _TaskSession([None, task])
+
+    turn = await prepare_conversation_task(
+        session, "conversation-1", "message-2", "继续复盘，重点改为退款商品"
+    )
+
+    assert turn.requires_clarification is False
+    assert turn.task is task
+    assert task.status == TASK_READY
+    assert task.revision == 2
+    assert task.effective_constraints["periods"] == [
+        {"label": "618", "start_date": "2026-06-01", "end_date": "2026-06-20"}
+    ]

@@ -9,6 +9,8 @@ from sqlalchemy import delete, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent.operation_agent import OperationAgent
+from app.agent.data_query_agent import DataQueryAgent
+from app.agent.task_orchestrator import MainAgentOrchestrator
 from app.agent.tools import AgentToolTracker
 from app.agent.execution_plan import build_execution_plan_for_mode
 from app.database import get_session
@@ -55,6 +57,12 @@ from app.services.conversation_tasks import (
     cancel_open_conversation_tasks,
     complete_conversation_task,
     prepare_conversation_task,
+)
+from app.services.task_plans import (
+    complete_task_plan,
+    ensure_task_plan,
+    fail_task_plan,
+    start_task_plan,
 )
 from app.services.authentication import get_current_user
 from app.services.user_memory import MemoryService
@@ -212,6 +220,7 @@ async def create_message(
     task_turn = await prepare_conversation_task(
         session, conversation_id, user_message.id, payload.content
     )
+    task_plan = await ensure_task_plan(session, task_turn.task)
     context_result = await build_and_persist_context(
         session,
         conversation_id,
@@ -231,6 +240,9 @@ async def create_message(
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache"},
         )
+    await start_task_plan(session, task_plan)
+    data_query_agent = DataQueryAgent(task_turn.task.effective_constraints, payload.content)
+    delegation_plan = MainAgentOrchestrator().plan(task_turn.task)
     memory_context = await MemoryService.retrieve_for_query(session, current_user.id, payload.content)
     await MemoryService.record_context_usage(session, current_user.id, memory_context)
     summary_context = await retrieve_summary_for_generation(session, conversation_id)
@@ -273,6 +285,8 @@ async def create_message(
                 conversation_summary_context=summary_context,
                 conversation_history_context=history_context,
                 route_override=task_turn.route_override,
+                data_query_agent=data_query_agent,
+                delegation_plan=delegation_plan,
             ):
                 if event.event_type == "status":
                     yield _event("status", {"content": event.content, "phase": event.phase or ""})
@@ -291,6 +305,7 @@ async def create_message(
             if agent.tool_tracker.route is not None:
                 update_run_route(run, agent.tool_tracker.route)
             await complete_conversation_task(task_turn.task, agent.tool_tracker.route)
+            await complete_task_plan(session, task_plan, agent.tool_tracker.tool_calls)
             run.agent_message_id = agent_message.id
             complete_run(run, full_answer, agent.tool_tracker, started_at)
             persist_tool_calls(session, run, agent_message.id, agent.tool_tracker.tool_calls)
@@ -357,6 +372,7 @@ async def create_message(
             yield _event("done", {"message_id": agent_message.id, "run_id": run.id})
         except Exception:
             await session.rollback()
+            await fail_task_plan(session, task_plan, "Agent 执行异常")
             if agent.tool_tracker.route is not None:
                 update_run_route(run, agent.tool_tracker.route)
             fail_run(run, started_at)

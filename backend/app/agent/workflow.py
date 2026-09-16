@@ -8,6 +8,9 @@ from dataclasses import dataclass
 from langchain_core.tools import BaseTool
 
 from app.agent.answer_generator import AnswerGenerator
+from app.agent.data_query_agent import DataQueryAgent
+from app.agent.review_agent import ReviewAgent
+from app.agent.task_orchestrator import DelegationPlan
 from app.agent.execution_plan import ExecutionPlan, build_execution_plan, validate_execution_plan
 from app.agent.prompt_builder import PromptBuilder
 from app.agent.tools import AgentToolTracker, build_agent_tools
@@ -52,6 +55,8 @@ class AgentWorkflow:
         conversation_summary_context: ConversationSummaryContext | None = None,
         conversation_history_context: ConversationHistoryContext | None = None,
         route_override: RetrievalRoute | None = None,
+        data_query_agent: DataQueryAgent | None = None,
+        delegation_plan: DelegationPlan | None = None,
     ) -> WorkflowResult:
         """先完成并校验执行计划，再允许模型基于受控结果组织回答。"""
         tracker = AgentToolTracker()
@@ -75,6 +80,8 @@ class AgentWorkflow:
             if route_override is not None
             else await self._resolve_route(user_input, retrieval_mode)
         )
+        if delegation_plan is not None:
+            route = RetrievalRoute(delegation_plan.route_mode, None, 1.0, False, "main_agent_delegation")
         tracker.set_route(route)
         plan = build_execution_plan(route)
         prepared_queries = None
@@ -88,7 +95,8 @@ class AgentWorkflow:
                 route.query_embedding if retrieval_question == user_input else None,
             )
         tools = build_agent_tools(tracker, self.settings, user_id, prepared_queries)
-        await self._emit_status(on_status, "plan", f"已生成执行计划：{plan.summary}")
+        batch_summary = " → ".join(" + ".join(batch) for batch in delegation_plan.batches) if delegation_plan else plan.summary
+        await self._emit_status(on_status, "plan", f"主 Agent 已生成执行批次：{batch_summary}")
         await self._run_execution_plan(
             tools,
             retrieval_question,
@@ -96,6 +104,7 @@ class AgentWorkflow:
             tracker,
             on_status,
             active_context,
+            data_query_agent,
         )
         await self._emit_status(on_status, "verification", "正在校验检索依据…")
         validation = validate_execution_plan(plan, tracker.tool_calls)
@@ -105,20 +114,36 @@ class AgentWorkflow:
                 self._verification_failure_answer(validation.summary), tracker.references, tracker
             )
 
+        if delegation_plan is not None and delegation_plan.use_review_agent:
+            await self._emit_status(on_status, "review", "正在将已验证证据包委派给复盘子 Agent…")
+            reviewed_answer = await ReviewAgent(self.settings).review(
+                user_input, tracker.data_context or "本轮没有可用证据。"
+            )
+            if reviewed_answer is not None:
+                return WorkflowResult(reviewed_answer, tracker.references, tracker)
+
         if self.settings.llm_enabled:
             await self._emit_status(on_status, "generation", "正在基于已验证依据生成结论…")
-            answer = await self.answer_generator.generate_with_llm(
-                user_input,
-                PromptBuilder.execution_instruction(
-                    plan,
-                    tracker.data_context,
-                    active_context.generation_context,
-                    active_memory_context.display,
-                    active_summary_context.display,
-                    active_history_context.display,
-                ),
-                tools,
+            generation_context = PromptBuilder.execution_instruction(
+                plan,
+                tracker.data_context,
+                active_context.generation_context,
+                active_memory_context.display,
+                active_summary_context.display,
+                active_history_context.display,
+                delegation_plan.output_contract if delegation_plan else "",
             )
+            if delegation_plan is None:
+                answer = await self.answer_generator.generate_with_llm(
+                    user_input, generation_context, tools
+                )
+            else:
+                answer = await self.answer_generator.generate_with_llm(
+                    user_input,
+                    generation_context,
+                    tools,
+                    use_review_agent=False,
+                )
             if answer is not None:
                 return WorkflowResult(answer, tracker.references, tracker)
 
@@ -156,6 +181,7 @@ class AgentWorkflow:
         tracker: AgentToolTracker,
         on_status: StatusCallback | None,
         conversation_context: ConversationContextSnapshot,
+        data_query_agent: DataQueryAgent | None = None,
     ) -> None:
         """严格按计划执行必调工具；单个工具失败时继续收集其他来源。"""
         tool_by_name = {item.name: item for item in tools}
@@ -164,12 +190,18 @@ class AgentWorkflow:
             if tool is None:
                 continue
             await AgentWorkflow._emit_status(on_status, "tool", AgentWorkflow._tool_start_message(tool_name))
-            payload = {"question": user_input}
-            if tool_name == "query_metric_rag":
-                payload["start_date"] = getattr(conversation_context, "start_date", None)
-                payload["end_date"] = getattr(conversation_context, "end_date", None)
             try:
-                await tool.ainvoke(payload)
+                if tool_name == "query_metric_rag" and data_query_agent is not None:
+                    await AgentWorkflow._emit_status(
+                        on_status, "data_query_plan", "数据查询子 Agent 正在确认指标、时间范围与数据能力…"
+                    )
+                    await data_query_agent.execute(tool, user_input, conversation_context)
+                else:
+                    payload: dict[str, object] = {"question": user_input}
+                    if tool_name == "query_metric_rag":
+                        payload["start_date"] = conversation_context.start_date
+                        payload["end_date"] = conversation_context.end_date
+                    await tool.ainvoke(payload)
             except Exception:
                 # 各工具包装器已记录稳定错误码；其余资料来源仍应继续尝试。
                 pass

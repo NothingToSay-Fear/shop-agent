@@ -7,6 +7,7 @@ from app.agent.execution_plan import build_execution_plan, validate_execution_pl
 from app.agent.tools.tracker import AgentToolTracker, ToolCallAudit
 from app.config import Settings
 from app.services.conversation_context import ConversationContextSnapshot
+from app.agent.data_query_agent import DataQueryAgent
 from app.services.intent_router import RetrievalRoute
 
 
@@ -150,7 +151,15 @@ async def test_workflow_passes_confirmed_context_to_controlled_tool(
         metric_hints=("支付订单数",),
     )
 
-    await workflow.answer("再看看订单量", "metrics", conversation_context=context)
+    await workflow.answer(
+        "再看看订单量",
+        "metrics",
+        conversation_context=context,
+        data_query_agent=DataQueryAgent(
+            {"metrics": ["paid_gmv", "conversion_rate", "refund_rate"]},
+            "分析 GMV、支付转化率和退款率",
+        ),
+    )
 
     assert captured_payload["question"] is not None
     assert "已确认会话查询条件" in captured_payload["question"]
@@ -158,3 +167,4 @@ async def test_workflow_passes_confirmed_context_to_controlled_tool(
     assert "指标=支付订单数" in captured_payload["question"]
     assert captured_payload["start_date"] == date(2026, 6, 1)
     assert captured_payload["end_date"] == date(2026, 6, 20)
+    assert captured_payload["metric_codes"] == ["paid_gmv", "conversion_rate", "refund_rate"]

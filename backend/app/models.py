@@ -2,7 +2,19 @@ import uuid
 from datetime import date, datetime
 from decimal import Decimal
 
-from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, JSON, Numeric, String, Text, func
+from sqlalchemy import (
+    Boolean,
+    Date,
+    DateTime,
+    ForeignKey,
+    Integer,
+    JSON,
+    Numeric,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from pgvector.sqlalchemy import Vector
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -160,9 +172,66 @@ class ConversationTask(Base, TimestampMixin):
     task_type: Mapped[str] = mapped_column(String(30), nullable=False, index=True)
     status: Mapped[str] = mapped_column(String(30), nullable=False, index=True)
     route_mode: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     task_frame: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False, default=dict)
+    effective_constraints: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False, default=dict)
+    pending_questions: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
     missing_slots: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
     source_message_ids: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class ConversationTaskEvent(Base):
+    """任务状态与约束变更的最小审计事件，不复制完整对话正文。"""
+
+    __tablename__ = "conversation_task_events"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    task_id: Mapped[str] = mapped_column(
+        ForeignKey("conversation_tasks.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    event_type: Mapped[str] = mapped_column(String(30), nullable=False, index=True)
+    source_message_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    details: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class TaskPlan(Base, TimestampMixin):
+    """某个任务版本对应的可审计执行计划。"""
+
+    __tablename__ = "task_plans"
+    __table_args__ = (UniqueConstraint("task_id", "revision", name="uq_task_plans_task_revision"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    task_id: Mapped[str] = mapped_column(
+        ForeignKey("conversation_tasks.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(30), nullable=False, default="ready", index=True)
+    summary: Mapped[str] = mapped_column(String(300), nullable=False)
+
+
+class TaskPlanStep(Base, TimestampMixin):
+    """计划中的一个受控步骤及其最小执行结果。"""
+
+    __tablename__ = "task_plan_steps"
+    __table_args__ = (UniqueConstraint("plan_id", "step_key", name="uq_task_plan_steps_plan_key"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    plan_id: Mapped[str] = mapped_column(
+        ForeignKey("task_plans.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    step_key: Mapped[str] = mapped_column(String(50), nullable=False)
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    tool_name: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    depends_on: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    status: Mapped[str] = mapped_column(String(30), nullable=False, default="pending", index=True)
+    result_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    evidence_references: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
@@ -292,6 +361,26 @@ class MetricDefinition(Base, TimestampMixin):
     calculation_formula: Mapped[str | None] = mapped_column(String(100), nullable=True)
     embedding: Mapped[list[float] | None] = mapped_column(JSON, nullable=True)
     embedding_model: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+
+class MetricAnalysisDriver(Base, TimestampMixin):
+    """指标归因图谱的一条有向边：目标指标由哪些可查询指标驱动。"""
+
+    __tablename__ = "metric_analysis_drivers"
+    __table_args__ = (
+        UniqueConstraint("metric_code", "driver_metric_code", name="uq_metric_analysis_drivers_edge"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    metric_code: Mapped[str] = mapped_column(
+        ForeignKey("metric_definitions.metric_code", ondelete="CASCADE"), nullable=False, index=True
+    )
+    driver_metric_code: Mapped[str] = mapped_column(
+        ForeignKey("metric_definitions.metric_code", ondelete="CASCADE"), nullable=False, index=True
+    )
+    relationship_type: Mapped[str] = mapped_column(String(30), nullable=False, default="driver")
+    display_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
 

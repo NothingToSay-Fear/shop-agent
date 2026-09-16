@@ -20,6 +20,7 @@ class PromptBuilder:
         user_memory_context: str = "",
         conversation_summary_context: str = "",
         conversation_history_context: str = "",
+        output_contract: str = "",
     ) -> str:
         """将已执行计划和可核验上下文传给模型，禁止其省略或重复事实获取。"""
         return (
@@ -42,6 +43,7 @@ class PromptBuilder:
             "若受控指标结果含有“【天数不等提示】”，不得依据两段总量的差异或比例下涨跌结论；"
             "应明确说明统计天数不同，并仅以受控结果给出的日均值、比率类指标或其他同口径数据解释趋势。\n"
             f"{data_context or '本轮没有检索到可用受控上下文。'}"
+            f"\n\n输出契约：{output_contract}"
         )
 
     @staticmethod

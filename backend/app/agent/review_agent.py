@@ -6,14 +6,41 @@ from collections.abc import Sequence
 
 from deepagents.middleware.filesystem import FilesystemMiddleware
 from langchain_core.tools import BaseTool
+from app.config import Settings
 
 REVIEW_AGENT_NAME = "operation_review_agent"
 GENERAL_PURPOSE_AGENT_NAME = "general-purpose"
 
 REVIEW_AGENT_PROMPT = """你是电商运营复盘专家，只处理活动效果、经营归因、复盘与优化建议。
-先调用 query_metric_rag 获取当前或指定周期的数据；问题涉及活动规则、历史方案或复盘资料时，必须再调用 query_knowledge_rag；涉及最新平台政策、行业或竞品动态时，调用 search_web。
-只能根据工具返回的数值和资料陈述事实；将“数据事实”“资料依据”“待验证假设”“建议动作”明确区分。
+你不能调用工具、读取文件或补充外部事实；只能消费主 Agent 已验证的数据与资料证据。
+对于“GMV 为什么变化”一类问题，必须先使用证据包内已查询的 GMV、支付订单数、访客数、支付转化率、客单价说明可观察到的驱动因素；不能仅因缺少商品或渠道明细，就跳过这些已可验证的指标拆解。仅当需要继续定位渠道、商品/SKU、人群、优惠或活动规则时，才将其写为待验证项，且不得把它们表述为已确认根因。
+将“数据事实”“资料依据”“待验证假设”“建议动作”明确区分。
 资料或数据未命中时如实说明，不得自行补全。输出简洁的复盘结论，供主 Agent 直接整合。"""
+
+
+class ReviewAgent:
+    """由主工作流显式调用的、无工具证据消费子 Agent。"""
+
+    def __init__(self, settings: Settings) -> None:
+        self.settings = settings
+
+    async def review(self, question: str, evidence_package: str) -> str | None:
+        if not self.settings.llm_enabled:
+            return None
+        try:
+            from langchain_openai import ChatOpenAI
+
+            options = {"model": self.settings.llm_model, "api_key": self.settings.llm_api_key, "temperature": 0.2}
+            if self.settings.llm_base_url:
+                options["base_url"] = self.settings.llm_base_url
+            model = ChatOpenAI(**options)
+            response = await model.ainvoke([
+                ("system", REVIEW_AGENT_PROMPT),
+                ("user", f"复盘任务：\n{question}\n\n已验证证据包：\n{evidence_package}"),
+            ])
+            return response.content if isinstance(response.content, str) else str(response.content)
+        except Exception:
+            return None
 
 
 def build_review_subagent(tools: Sequence[BaseTool]) -> dict[str, object]:
@@ -22,9 +49,8 @@ def build_review_subagent(tools: Sequence[BaseTool]) -> dict[str, object]:
         "name": REVIEW_AGENT_NAME,
         "description": "处理活动复盘、经营归因、效果评估和优化建议；会查询受控指标、知识库和必要的公开网络资料。",
         "system_prompt": REVIEW_AGENT_PROMPT,
-        "tools": list(tools),
-        # DeepAgent 的文件系统中间件要求至少保留 read_file；不开放写入或命令执行。
-        "middleware": [FilesystemMiddleware(tools=["read_file"])],
+        # 复盘子 Agent 只消费主 Agent 已验证的证据，不能重复查询或读写文件。
+        "tools": [],
     }
 
 

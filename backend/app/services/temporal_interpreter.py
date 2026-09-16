@@ -15,6 +15,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import Settings, get_settings
 from app.models import DailyMetric
 from app.services.business_dates import current_business_date
+from app.services.activity_periods import resolve_activity_periods
+from app.services.date_ranges import parse_explicit_date_ranges
 from app.services.local_embeddings import embed_texts
 
 TemporalStatus = Literal["no_time", "resolved", "clarify", "forecast"]
@@ -47,7 +49,8 @@ class TemporalResolution:
 
     @property
     def resets_inherited_range(self) -> bool:
-        return self.status != "no_time"
+        """仅明确解析出的新范围才能覆盖既有范围。"""
+        return self.status == "resolved"
 
 
 _PROMPT = """你是电商运营问题的时间范围解析器。只输出 JSON，不能回答业务问题、不能输出 SQL。
@@ -73,6 +76,16 @@ async def resolve_temporal_intent(
 ) -> TemporalResolution:
     """本地门控决定是否调用 LLM；后端只校验其规范化日期。"""
     active_settings = settings or get_settings()
+    explicit_periods = parse_explicit_date_ranges(question)
+    if explicit_periods:
+        return TemporalResolution(
+            "resolved",
+            tuple((label, start_date, end_date) for label, (start_date, end_date) in explicit_periods),
+            source="local_gate",
+        )
+    activity_periods = resolve_activity_periods(question)
+    if activity_periods:
+        return TemporalResolution("resolved", activity_periods, source="local_gate")
     if not await _needs_temporal_normalization(question, active_settings):
         return TemporalResolution("no_time", source="local_gate")
     latest_date = await session.scalar(

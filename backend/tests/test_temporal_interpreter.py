@@ -1,6 +1,10 @@
 from datetime import date
 
-from app.services.temporal_interpreter import _needs_llm_from_scores, _validate_llm_resolution
+from app.services.temporal_interpreter import (
+    TemporalResolution,
+    _needs_llm_from_scores,
+    _validate_llm_resolution,
+)
 
 
 def test_llm_normalized_periods_are_accepted_only_with_valid_iso_dates() -> None:
@@ -36,6 +40,12 @@ def test_no_time_does_not_inject_a_date_range() -> None:
     result = _validate_llm_resolution('{"status":"no_time","periods":[]}', date(2026, 9, 16))
 
     assert result.status == "no_time"
+    assert result.resets_inherited_range is False
+
+
+def test_clarification_does_not_reset_an_inherited_date_range() -> None:
+    result = TemporalResolution("clarify", clarification="请确认日期范围")
+
     assert result.resets_inherited_range is False
 
 

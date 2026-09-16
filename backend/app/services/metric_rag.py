@@ -11,9 +11,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings, get_settings
 from app.models import DailyMetric, MetricDefinition
+from app.services.metric_analysis_graph import seed_metric_analysis_drivers
 from app.services.business_dates import current_business_date
 from app.services.local_embeddings import embed_texts
-from app.services.activity_periods import ACTIVITY_PERIODS
+from app.services.activity_periods import ACTIVITY_PERIODS, resolve_activity_periods
 from app.services.date_ranges import parse_explicit_date_range, parse_explicit_date_ranges
 from app.services.hybrid_retrieval import hybrid_retrieve
 from app.services.query_expansion import (
@@ -243,6 +244,8 @@ async def seed_metric_definitions(session: AsyncSession) -> None:
                 enabled=True,
             )
         )
+    await session.flush()
+    await seed_metric_analysis_drivers(session)
 
 
 async def query_metrics_for_question(
@@ -367,6 +370,104 @@ async def query_metrics_for_question(
     )
 
 
+async def query_metrics_for_codes(
+    session: AsyncSession,
+    metric_codes: tuple[str, ...],
+    question: str,
+    settings: Settings | None = None,
+    constraints: MetricQueryConstraints | None = None,
+    query_plan: MetricQueryPlan | None = None,
+    capability_notes: tuple[str, ...] = (),
+) -> MetricQueryContext | None:
+    """按数据查询计划指定的指标执行，而不是再次对指标定义做 RAG 截断。"""
+    requested_codes = list(dict.fromkeys(metric_codes))
+    if not requested_codes:
+        return None
+
+    definitions = list(
+        await session.scalars(select(MetricDefinition).where(MetricDefinition.enabled.is_(True)))
+    )
+    definition_map = {definition.metric_code: definition for definition in definitions}
+    available_codes = [code for code in requested_codes if code in definition_map]
+    if not available_codes:
+        return None
+
+    plan = query_plan or build_metric_query_plan(question, constraints)
+    if not plan.units:
+        fallback_period = await _resolve_period(session, question)
+        if fallback_period is None:
+            return None
+        plan = MetricQueryPlan((MetricQueryUnit("当前查询范围", *fallback_period),))
+
+    resolved_codes = _resolve_dependencies(available_codes, definition_map)
+    values_by_unit: list[dict[str, float]] = []
+    for unit in plan.units:
+        values: dict[str, float] = {}
+        for metric_code in resolved_codes:
+            definition = definition_map[metric_code]
+            if definition.query_template:
+                values[metric_code] = await _execute_controlled_template(
+                    session, definition.query_template, unit.start_date, unit.end_date
+                )
+        for metric_code in resolved_codes:
+            definition = definition_map[metric_code]
+            if definition.calculation_formula:
+                values[metric_code] = _calculate_metric(definition.calculation_formula, values)
+        values_by_unit.append(values)
+
+    lines = ["数据来源：经营数据（按任务数据查询计划执行）"]
+    for note in capability_notes:
+        lines.append(f"【数据能力边界】{note}")
+    for unit, values in zip(plan.units, values_by_unit, strict=True):
+        lines.append(f"【{unit.label}：{unit.start_date} 至 {unit.end_date}】")
+        for metric_code in available_codes:
+            definition = definition_map[metric_code]
+            lines.append(f"{definition.name}：{_format_value(metric_code, values[metric_code])}")
+    if len(plan.units) > 1:
+        lines.append("【区间对比】")
+        baseline_unit, baseline_values = plan.units[0], values_by_unit[0]
+        baseline_days = _unit_days(baseline_unit)
+        for unit, values in zip(plan.units[1:], values_by_unit[1:], strict=True):
+            compared_days = _unit_days(unit)
+            unequal_days = baseline_days != compared_days
+            if unequal_days:
+                lines.append(
+                    f"【天数不等提示】{baseline_unit.label} 共 {baseline_days} 天，"
+                    f"{unit.label} 共 {compared_days} 天；总量仅用于规模参考，可比趋势请以日均值为准。"
+                )
+            for metric_code in available_codes:
+                definition = definition_map[metric_code]
+                lines.append(
+                    _format_unit_comparison(
+                        definition,
+                        baseline_unit,
+                        baseline_values[metric_code],
+                        unit,
+                        values[metric_code],
+                        unequal_days,
+                    )
+                )
+                if unequal_days and metric_code not in {
+                    "conversion_rate",
+                    "refund_rate",
+                    "average_order_value",
+                }:
+                    lines.append(
+                        _format_daily_average_comparison(
+                            definition,
+                            baseline_unit,
+                            baseline_values[metric_code],
+                            baseline_days,
+                            unit,
+                            values[metric_code],
+                            compared_days,
+                        )
+                    )
+    return MetricQueryContext(
+        text="\n".join(lines), metric_codes=tuple(available_codes), query_units=plan.units
+    )
+
+
 def build_metric_query_plan(
     question: str, constraints: MetricQueryConstraints | None = None
 ) -> MetricQueryPlan:
@@ -395,14 +496,9 @@ def _explicit_period_units(question: str) -> tuple[MetricQueryUnit, ...]:
 
 def _activity_period_units(question: str) -> tuple[MetricQueryUnit, ...]:
     """识别问题中全部已登记活动，避免会话单一活动条件覆盖本轮对比对象。"""
-    lowered = question.lower()
-    matched: list[tuple[int, MetricQueryUnit]] = []
-    for activity, (aliases, start_date, end_date) in ACTIVITY_PERIODS.items():
-        positions = [lowered.find(alias.lower()) for alias in aliases if lowered.find(alias.lower()) >= 0]
-        if positions:
-            matched.append((min(positions), MetricQueryUnit(activity, start_date, end_date)))
-    matched.sort(key=lambda item: item[0])
-    return _deduplicate_query_units([unit for _, unit in matched])
+    return _deduplicate_query_units(
+        [MetricQueryUnit(activity, start_date, end_date) for activity, start_date, end_date in resolve_activity_periods(question)]
+    )
 
 
 def _deduplicate_query_units(units: list[MetricQueryUnit]) -> tuple[MetricQueryUnit, ...]:

@@ -106,7 +106,7 @@ def _interpretation_input(task: ConversationTask, question: str) -> str:
         "route_mode": task.route_mode,
         "base_question": str(frame.get("base_question") or "")[:_TASK_FRAME_TEXT_LIMIT],
         "supplements": [str(item)[:300] for item in frame.get("supplements", [])][-3:],
-        "comparison_periods": frame.get("comparison_periods"),
+        "effective_constraints": dict(task.effective_constraints or {}),
         "missing_slots": list(task.missing_slots or []),
     }
     return (

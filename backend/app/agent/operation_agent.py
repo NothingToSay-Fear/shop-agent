@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from typing import Literal
 
 from app.agent.streaming import split_answer_fragments
+from app.agent.data_query_agent import DataQueryAgent
+from app.agent.task_orchestrator import DelegationPlan
 from app.agent.tools import AgentToolTracker
 from app.agent.workflow import AgentWorkflow
 from app.config import Settings, get_settings
@@ -44,6 +46,8 @@ class OperationAgent:
         conversation_summary_context: ConversationSummaryContext | None = None,
         conversation_history_context: ConversationHistoryContext | None = None,
         route_override: RetrievalRoute | None = None,
+        data_query_agent: DataQueryAgent | None = None,
+        delegation_plan: DelegationPlan | None = None,
     ) -> AsyncIterator[AgentStreamEvent]:
         """并发接收工作流阶段事件，完成后再流式输出回答文本。"""
         queue: asyncio.Queue[AgentStreamEvent | Exception | object] = asyncio.Queue()
@@ -64,6 +68,8 @@ class OperationAgent:
                     conversation_summary_context,
                     conversation_history_context,
                     route_override,
+                    data_query_agent,
+                    delegation_plan,
                 )
                 await queue.put(result)
             except Exception as error:
