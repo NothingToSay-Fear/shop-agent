@@ -38,6 +38,26 @@ body { margin: 0; min-width: 1080px; }
 .message-card.agent .ant-card-body { padding: 20px 24px; }
 .message-title { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
 .message-body { white-space: pre-wrap; line-height: 1.75; }
+
+.message-streaming-content {
+  min-height: 1.75em;
+  white-space: pre-wrap;
+  line-height: 1.75;
+}
+
+.streaming-caret {
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  margin-left: 2px;
+  vertical-align: -0.12em;
+  background: currentColor;
+  animation: streaming-caret-blink 0.9s steps(1, end) infinite;
+}
+
+@keyframes streaming-caret-blink {
+  50% { opacity: 0; }
+}
 .message-rich-content { color: #37352f; font-size: 15px; line-height: 1.65; }
 .message-rich-content > :first-child { margin-top: 0; }
 .message-rich-content > :last-child { margin-bottom: 0; }

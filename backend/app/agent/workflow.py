@@ -26,6 +26,7 @@ from app.services.query_expansion import prepare_retrieval_queries
 from app.services.user_memory import UserMemoryContext
 
 StatusCallback = Callable[[str, str], Awaitable[None]]
+ChunkCallback = Callable[[str], Awaitable[None]]
 
 
 @dataclass(frozen=True)
@@ -57,6 +58,7 @@ class AgentWorkflow:
         route_override: RetrievalRoute | None = None,
         data_query_agent: DataQueryAgent | None = None,
         delegation_plan: DelegationPlan | None = None,
+        on_chunk: ChunkCallback | None = None,
     ) -> WorkflowResult:
         """先完成并校验执行计划，再允许模型基于受控结果组织回答。"""
         tracker = AgentToolTracker()
@@ -116,8 +118,8 @@ class AgentWorkflow:
 
         if delegation_plan is not None and delegation_plan.use_review_agent:
             await self._emit_status(on_status, "review", "正在将已验证证据包委派给复盘子 Agent…")
-            reviewed_answer = await ReviewAgent(self.settings).review(
-                user_input, tracker.data_context or "本轮没有可用证据。"
+            reviewed_answer = await self._generate_review_answer(
+                user_input, tracker.data_context or "本轮没有可用证据。", on_chunk
             )
             if reviewed_answer is not None:
                 return WorkflowResult(reviewed_answer, tracker.references, tracker)
@@ -133,35 +135,54 @@ class AgentWorkflow:
                 active_history_context.display,
                 delegation_plan.output_contract if delegation_plan else "",
             )
-            if delegation_plan is None:
-                answer = await self.answer_generator.generate_with_llm(
-                    user_input, generation_context, tools
-                )
-            else:
-                answer = await self.answer_generator.generate_with_llm(
-                    user_input,
-                    generation_context,
-                    tools,
-                    use_review_agent=False,
-                )
+            answer = await self._generate_answer(user_input, generation_context, tools, on_chunk)
             if answer is not None:
                 return WorkflowResult(answer, tracker.references, tracker)
 
             await self._emit_status(on_status, "generation", "模型暂不可用，正在返回已验证依据…")
-            return WorkflowResult(
-                self.answer_generator.generate_evidence_response(
-                    tracker.data_context, model_error=True
-                ),
-                tracker.references,
-                tracker,
+            answer = self.answer_generator.generate_evidence_response(
+                tracker.data_context, model_error=True
             )
+            await self._emit_chunk(on_chunk, answer)
+            return WorkflowResult(answer, tracker.references, tracker)
 
         await self._emit_status(on_status, "generation", "LLM 未配置，正在返回已验证依据…")
-        return WorkflowResult(
-            self.answer_generator.generate_evidence_response(tracker.data_context),
-            tracker.references,
-            tracker,
-        )
+        answer = self.answer_generator.generate_evidence_response(tracker.data_context)
+        await self._emit_chunk(on_chunk, answer)
+        return WorkflowResult(answer, tracker.references, tracker)
+
+    async def _generate_answer(
+        self,
+        user_input: str,
+        generation_context: str,
+        tools: list[BaseTool],
+        on_chunk: ChunkCallback | None,
+    ) -> str | None:
+        """通常请求逐片转发模型生成。没有 SSE 消费者时保留完整回答接口，供同步调用和旧测试使用。"""
+        if on_chunk is None:
+            return await self.answer_generator.generate_with_llm(user_input, generation_context, tools)
+
+        parts: list[str] = []
+        async for chunk in self.answer_generator.stream_with_llm(user_input, generation_context, tools):
+            parts.append(chunk)
+            await self._emit_chunk(on_chunk, chunk)
+        return "".join(parts) or None
+
+    async def _generate_review_answer(
+        self,
+        user_input: str,
+        evidence_package: str,
+        on_chunk: ChunkCallback | None,
+    ) -> str | None:
+        review_agent = ReviewAgent(self.settings)
+        if on_chunk is None:
+            return await review_agent.review(user_input, evidence_package)
+
+        parts: list[str] = []
+        async for chunk in review_agent.stream_review(user_input, evidence_package):
+            parts.append(chunk)
+            await self._emit_chunk(on_chunk, chunk)
+        return "".join(parts) or None
 
     async def _resolve_route(
         self,
@@ -216,6 +237,11 @@ class AgentWorkflow:
         """仅在调用方需要时推送不含用户原文和工具原文的执行进度。"""
         if on_status is not None:
             await on_status(phase, content)
+
+    @staticmethod
+    async def _emit_chunk(on_chunk: ChunkCallback | None, content: str) -> None:
+        if on_chunk is not None and content:
+            await on_chunk(content)
 
     @staticmethod
     def _tool_start_message(tool_name: str) -> str:

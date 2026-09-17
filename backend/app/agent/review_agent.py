@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+import logging
+from collections.abc import AsyncIterator, Sequence
 
 from deepagents.middleware.filesystem import FilesystemMiddleware
 from langchain_core.tools import BaseTool
 from app.config import Settings
+
+logger = logging.getLogger(__name__)
 
 REVIEW_AGENT_NAME = "operation_review_agent"
 GENERAL_PURPOSE_AGENT_NAME = "general-purpose"
@@ -41,6 +44,31 @@ class ReviewAgent:
             return response.content if isinstance(response.content, str) else str(response.content)
         except Exception:
             return None
+
+    async def stream_review(self, question: str, evidence_package: str) -> AsyncIterator[str]:
+        """流式输出复盘结论，仍只消费主工作流已验证的证据包。"""
+        if not self.settings.llm_enabled:
+            return
+        try:
+            from langchain_openai import ChatOpenAI
+
+            options = {
+                "model": self.settings.llm_model,
+                "api_key": self.settings.llm_api_key,
+                "temperature": 0.2,
+            }
+            if self.settings.llm_base_url:
+                options["base_url"] = self.settings.llm_base_url
+            model = ChatOpenAI(**options)
+            async for chunk in model.astream([
+                ("system", REVIEW_AGENT_PROMPT),
+                ("user", f"复盘任务：\n{question}\n\n已验证证据包：\n{evidence_package}"),
+            ]):
+                content = chunk.content
+                if isinstance(content, str) and content:
+                    yield content
+        except Exception:
+            logger.exception("复盘子 Agent 流式生成失败")
 
 
 def build_review_subagent(tools: Sequence[BaseTool]) -> dict[str, object]:

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
 
 from langchain_core.tools import BaseTool
 
@@ -33,6 +33,33 @@ class AnswerGenerator:
             logger.exception("模型回答生成失败，将仅返回已验证的受控工具证据。")
             return None
 
+    async def stream_with_llm(
+        self,
+        user_input: str,
+        orchestration_context: str | None,
+        tools: Sequence[BaseTool],
+    ) -> AsyncIterator[str]:
+        """逐个转发模型生成的文本片段。
+
+工具已由主工作流在进入生成层前执行，此处只流式输出最终表达，不赋予模型额外的事实获取能力。
+        """
+        try:
+            agent = self._build_deep_agent(tools)
+            context_suffix = (
+                f"\n\n系统编排要求：\n{orchestration_context}"
+                if orchestration_context
+                else ""
+            )
+            async for event in agent.astream(
+                {"messages": [{"role": "user", "content": f"{user_input}{context_suffix}"}]},
+                stream_mode="messages",
+            ):
+                text = self._stream_event_text(event)
+                if text:
+                    yield text
+        except Exception:
+            logger.exception("模型流式回答生成失败，将返回已验证的受控工具证据。")
+
     async def _deep_agent_answer(
         self,
         user_input: str,
@@ -41,28 +68,7 @@ class AnswerGenerator:
         use_review_agent: bool,
     ) -> str:
         """创建最小权限 DeepAgent 并返回最后一条模型消息。"""
-        from deepagents import create_deep_agent
-        from deepagents.middleware.filesystem import FilesystemMiddleware
-        from langchain_openai import ChatOpenAI
-
-        model_options = {
-            "model": self.settings.llm_model,
-            "api_key": self.settings.llm_api_key,
-            "temperature": 0.2,
-        }
-        if self.settings.llm_base_url:
-            # 仅在用户明确配置时传入可选服务端点。
-            model_options["base_url"] = self.settings.llm_base_url
-        model = ChatOpenAI(**model_options)
-        agent = create_deep_agent(
-            model=model,
-            tools=list(tools),
-            # 子 Agent 由主工作流显式委派；生成器不再交给 DeepAgent 自行选择子 Agent。
-            subagents=[],
-            # 覆盖框架默认文件系统中间件，只保留其要求的只读能力。
-            middleware=[FilesystemMiddleware(tools=["read_file"])],
-            system_prompt=BASE_SYSTEM_PROMPT + PromptBuilder.tool_orchestration_prompt(),
-        )
+        agent = self._build_deep_agent(tools)
         context_suffix = (
             f"\n\n系统编排要求：\n{orchestration_context}" if orchestration_context else ""
         )
@@ -74,6 +80,48 @@ class AnswerGenerator:
             raise RuntimeError("Agent did not return a message")
         content = messages[-1].content
         return content if isinstance(content, str) else str(content)
+
+    def _build_deep_agent(self, tools: Sequence[BaseTool]):
+        """创建生成用的最小权限 DeepAgent，供同步完整回答与流式回答共用。"""
+        from deepagents import create_deep_agent
+        from deepagents.middleware.filesystem import FilesystemMiddleware
+        from langchain_openai import ChatOpenAI
+
+        model_options = {
+            "model": self.settings.llm_model,
+            "api_key": self.settings.llm_api_key,
+            "temperature": 0.2,
+        }
+        if self.settings.llm_base_url:
+            model_options["base_url"] = self.settings.llm_base_url
+        return create_deep_agent(
+            model=ChatOpenAI(**model_options),
+            tools=list(tools),
+            subagents=[],
+            middleware=[FilesystemMiddleware(tools=["read_file"])],
+            system_prompt=BASE_SYSTEM_PROMPT + PromptBuilder.tool_orchestration_prompt(),
+        )
+
+    @staticmethod
+    def _stream_event_text(event: object) -> str:
+        """只转发最终 AI 消息片段，忽略 LangGraph 的元数据和工具消息。"""
+        from langchain_core.messages import AIMessageChunk
+
+        if not isinstance(event, tuple) or not event:
+            return ""
+        message = event[0]
+        if not isinstance(message, AIMessageChunk):
+            return ""
+        content = message.content
+        if isinstance(content, str):
+            return content
+        if not isinstance(content, list):
+            return ""
+        return "".join(
+            item.get("text", "")
+            for item in content
+            if isinstance(item, dict) and isinstance(item.get("text"), str)
+        )
 
     @staticmethod
     def generate_evidence_response(data_context: str | None, model_error: bool = False) -> str:

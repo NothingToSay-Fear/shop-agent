@@ -163,7 +163,7 @@ SQL 模板存储在表中以便维护指标口径，但执行前必须与后端�
 
 ### Agent 服务
 
-- `OperationAgent` 只负责调用正式工作流并将最终文本拆分为 SSE 片段；不提供外部注入检索上下文的旁路，因此不直接处理路由、工具调用、模型创建或回答文案。
+- `OperationAgent` 只负责调用正式工作流并实时转发模型生成中的 SSE 文本片段；不提供外部注入检索上下文的旁路，因此不直接处理路由、工具调用、模型创建或回答文案。
 - `AgentWorkflow` 负责意图路由、构造并执行 `ExecutionPlan`、校验工具轨迹和来源，再将已验证上下文交给模型总结；`AnswerGenerator` 负责 DeepAgent/LLM 回答与受控证据回退；`PromptBuilder` 只生成系统提示词与已执行计划约束。
 
 ```text
@@ -277,7 +277,7 @@ OperationAgent（流式输出）
 
 ### 4.2 执行阶段 SSE 与前端展示
 
-`OperationAgent.stream_events` 通过内存队列将工作流进度转换为 SSE `status` 事件；回答文本仍以原有的 `chunk` 事件发送。进度只包含稳定的阶段文案，不携带用户原文、检索正文或密钥：
+`OperationAgent.stream_events` 通过内存队列将工作流进度转换为 SSE `status` 事件，并在 `AnswerGenerator` 或复盘模型生成时立即转发 `chunk` 事件；不再等待完整回答后进行固定长度切片。前端按动画帧合并短分片以降低重渲染频率，生成期间以纯文本显示，`done` 后再使用 Notion 式 Markdown 渲染完整回答。进度只包含稳定的阶段文案，不携带用户原文、检索正文或密钥：
 
 ```text
 status：正在应用本会话已确认的查询条件

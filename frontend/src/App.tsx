@@ -413,6 +413,17 @@ export function App() {
     setInput("");
     setStreaming(true);
     setStreamingStatus("正在判断问题类型…");
+    let bufferedChunk = "";
+    let animationFrame: number | undefined;
+    const flushBufferedChunk = () => {
+      animationFrame = undefined;
+      if (!bufferedChunk) return;
+      const nextChunk = bufferedChunk;
+      bufferedChunk = "";
+      setMessages((items) =>
+        items.map((item) => (item.id === "streaming" ? { ...item, content: item.content + nextChunk } : item)),
+      );
+    };
 
     try {
       await api.streamMessage(
@@ -421,9 +432,10 @@ export function App() {
         "hybrid",
         (content) => setStreamingStatus(content),
         (chunk) => {
-          setMessages((items) =>
-            items.map((item) => (item.id === "streaming" ? { ...item, content: item.content + chunk } : item)),
-          );
+          bufferedChunk += chunk;
+          if (animationFrame === undefined) {
+            animationFrame = window.requestAnimationFrame(flushBufferedChunk);
+          }
         },
         (candidate) => {
           setMemoryCandidates((items) => [
@@ -433,12 +445,16 @@ export function App() {
         },
         () => undefined,
       );
+      if (animationFrame !== undefined) window.cancelAnimationFrame(animationFrame);
+      flushBufferedChunk();
       // 收到 `done` 后重新加载，用数据库生成的 ID 和时间替换临时消息。
       await Promise.all([loadMessages(activeConversationId), refreshConversations()]);
     } catch (error) {
       message.error(error instanceof Error ? error.message : "生成回答失败。");
       setMessages((items) => items.filter((item) => item.id !== "streaming"));
     } finally {
+      if (animationFrame !== undefined) window.cancelAnimationFrame(animationFrame);
+      flushBufferedChunk();
       setStreaming(false);
       setStreamingStatus("");
     }
@@ -657,7 +673,10 @@ export function App() {
                   )}
                   <div className="message-body">
                     {item.sender_type === "agent"
-                      ? <MessageContent content={item.content || (item.id === "streaming" ? "" : "正在思考…")} />
+                      ? <MessageContent
+                        content={item.content || (item.id === "streaming" ? "" : "正在思考…")}
+                        streaming={item.id === "streaming"}
+                      />
                       : item.content}
                   </div>
                   {item.sender_type === "agent" && item.data_references && (

@@ -8,14 +8,14 @@ from app.agent.tools import AgentToolTracker, build_agent_tools
 from app.config import Settings
 
 
-def test_review_subagent_only_receives_declared_tools() -> None:
-    """复盘子 Agent 的职责必须收敛到已声明的受控工具。"""
+def test_review_subagent_consumes_evidence_without_tools() -> None:
+    """复盘子 Agent 只消费主工作流已验证的证据，不重复查询或获得工具权限。"""
     tools = [object(), object()]
 
     subagent = build_review_subagent(tools)
 
     assert subagent["name"] == REVIEW_AGENT_NAME
-    assert subagent["tools"] == tools
+    assert subagent["tools"] == []
     assert "复盘" in str(subagent["description"])
 
 

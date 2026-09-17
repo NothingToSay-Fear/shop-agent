@@ -5,7 +5,6 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Literal
 
-from app.agent.streaming import split_answer_fragments
 from app.agent.data_query_agent import DataQueryAgent
 from app.agent.task_orchestrator import DelegationPlan
 from app.agent.tools import AgentToolTracker
@@ -49,12 +48,15 @@ class OperationAgent:
         data_query_agent: DataQueryAgent | None = None,
         delegation_plan: DelegationPlan | None = None,
     ) -> AsyncIterator[AgentStreamEvent]:
-        """并发接收工作流阶段事件，完成后再流式输出回答文本。"""
+        """并发转发工作流状态与生成中的文本分片。"""
         queue: asyncio.Queue[AgentStreamEvent | Exception | object] = asyncio.Queue()
         completed = object()
 
         async def publish_status(phase: str, content: str) -> None:
             await queue.put(AgentStreamEvent("status", content, phase))
+
+        async def publish_chunk(content: str) -> None:
+            await queue.put(AgentStreamEvent("chunk", content))
 
         async def execute() -> None:
             try:
@@ -70,6 +72,7 @@ class OperationAgent:
                     route_override,
                     data_query_agent,
                     delegation_plan,
+                    publish_chunk,
                 )
                 await queue.put(result)
             except Exception as error:
@@ -90,8 +93,6 @@ class OperationAgent:
                     continue
                 self.data_references = item.data_references
                 self.tool_tracker = item.tracker
-                for fragment in split_answer_fragments(item.answer):
-                    yield AgentStreamEvent("chunk", fragment)
         finally:
             if not task.done():
                 task.cancel()
