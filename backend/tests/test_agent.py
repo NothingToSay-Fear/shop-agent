@@ -26,7 +26,7 @@ async def test_agent_stream_events_forwards_workflow_status_and_answer(
     ) -> WorkflowResult:
         assert user_input == "查询本周 GMV"
         await on_status("routing", "正在判断问题类型…")
-        on_chunk = args[-1]
+        on_chunk = args[-3]
         assert callable(on_chunk)
         await on_chunk("这是实时输出的")
         await on_chunk("受控工作流回答。")

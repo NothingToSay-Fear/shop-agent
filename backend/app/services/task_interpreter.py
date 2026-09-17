@@ -42,6 +42,7 @@ class TaskRelationshipDecision:
     confidence: float
     reason: str
     source: Literal["llm", "fallback"]
+    next_task_input: str | None = None
 
 
 TASK_INTERPRETATION_PROMPT = """你是电商运营助手的会话任务解释器。
@@ -58,6 +59,13 @@ relation 只能是以下之一：
 
 仅输出严格 JSON：
 {"relation":"continue|revise|replace|cancel","changed_slots":["task_type|metric|comparison|time_range|activity|knowledge_scope|analysis_goal"],"confidence":0.0,"reason":"不超过80字的中文原因"}
+"""
+
+
+TASK_INTERPRETATION_PROMPT += """
+
+补充输出约束：当 relation=replace 时，必须在 JSON 中增加 next_task_input。它必须是当前用户输入中“新任务”对应的连续原文片段，不得改写、补充，也不得包含被取消或替换的旧任务描述。其他 relation 的 next_task_input 必须为 null。
+replace 时 JSON 必须包含："next_task_input":"当前用户输入中的新任务原文片段"。
 """
 
 
@@ -89,7 +97,7 @@ async def interpret_task_relationship(
             ]
         )
         payload = _parse_decision(response.content if isinstance(response.content, str) else str(response.content))
-        if payload is not None:
+        if payload is not None and _is_valid_for_current_input(payload, question):
             return payload
     except Exception:
         # 任务解释不应成为问答可用性的单点依赖，失败时保留确定性行为。
@@ -143,7 +151,27 @@ def _parse_decision(content: str) -> TaskRelationshipDecision | None:
     reason = " ".join(str(payload.get("reason", "")).split())[:160]
     if not reason:
         return None
-    return TaskRelationshipDecision(relation, normalized_slots, confidence, reason, "llm")
+    next_task_input = payload.get("next_task_input")
+    if relation == "replace":
+        if not isinstance(next_task_input, str):
+            return None
+        next_task_input = " ".join(next_task_input.split())[:_TASK_FRAME_TEXT_LIMIT]
+        if not next_task_input:
+            return None
+    elif next_task_input is not None:
+        return None
+    return TaskRelationshipDecision(
+        relation, normalized_slots, confidence, reason, "llm", next_task_input
+    )
+
+
+def _is_valid_for_current_input(decision: TaskRelationshipDecision, question: str) -> bool:
+    """替换任务的输入必须是用户原文片段，模型不能借此增删业务约束。"""
+    if decision.relation != "replace":
+        return True
+    if decision.next_task_input is None:
+        return False
+    return decision.next_task_input in " ".join(question.split())
 
 
 def _fallback_decision(task: ConversationTask, question: str) -> TaskRelationshipDecision:

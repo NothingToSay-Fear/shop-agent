@@ -15,6 +15,7 @@ from app.services.conversation_history import ConversationHistoryContext
 from app.services.conversation_summary import ConversationSummaryContext
 from app.services.intent_router import RetrievalMode, RetrievalRoute
 from app.services.user_memory import UserMemoryContext
+from app.services.task_plans import ExecutablePlanAction, PlanExecutionController
 
 
 @dataclass(frozen=True)
@@ -47,6 +48,8 @@ class OperationAgent:
         route_override: RetrievalRoute | None = None,
         data_query_agent: DataQueryAgent | None = None,
         delegation_plan: DelegationPlan | None = None,
+        plan_actions: list[ExecutablePlanAction] | None = None,
+        plan_controller: PlanExecutionController | None = None,
     ) -> AsyncIterator[AgentStreamEvent]:
         """并发转发工作流状态与生成中的文本分片。"""
         queue: asyncio.Queue[AgentStreamEvent | Exception | object] = asyncio.Queue()
@@ -73,6 +76,8 @@ class OperationAgent:
                     data_query_agent,
                     delegation_plan,
                     publish_chunk,
+                    plan_actions,
+                    plan_controller,
                 )
                 await queue.put(result)
             except Exception as error:

@@ -363,13 +363,15 @@ def test_task_interpreter_accepts_only_high_confidence_constrained_json() -> Non
     """模型只能提供限定的关系判断；低置信度或额外槽位不会影响后端任务执行。"""
     decision = _parse_decision(
         '{"relation":"replace","changed_slots":["time_range","unknown"],'
-        '"confidence":0.91,"reason":"比较周期从周切换为月"}'
+        '"confidence":0.91,"reason":"比较周期从周切换为月",'
+        '"next_task_input":"比较上个月和这个月的 GMV"}'
     )
 
     assert decision is not None
     assert decision.relation == "replace"
     assert decision.changed_slots == ("time_range",)
     assert decision.source == "llm"
+    assert decision.next_task_input == "比较上个月和这个月的 GMV"
     assert _parse_decision(
         '{"relation":"replace","changed_slots":[],"confidence":0.2,"reason":"不确定"}'
     ) is None
@@ -490,3 +492,121 @@ async def test_revise_keeps_confirmed_period_when_current_turn_needs_no_time_cha
     assert task.effective_constraints["periods"] == [
         {"label": "618", "start_date": "2026-06-01", "end_date": "2026-06-20"}
     ]
+
+
+@pytest.mark.asyncio
+async def test_explicitly_preserved_range_cannot_be_replaced_when_goal_changes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    task = ConversationTask(
+        conversation_id="conversation-1",
+        task_type=TASK_METRIC_COMPARISON,
+        status=TASK_COMPLETED,
+        route_mode="metrics",
+        revision=1,
+        task_frame={"base_question": "对比两段 GMV", "supplements": []},
+        effective_constraints={
+            "periods": [
+                {"label": "本期", "start_date": "2026-09-14", "end_date": "2026-09-16"},
+                {"label": "上期", "start_date": "2026-09-07", "end_date": "2026-09-09"},
+            ],
+            "metrics": ["paid_gmv"],
+            "execution_intent": {
+                "operation": "comparison",
+                "evidence_sources": ["metrics"],
+                "output_scope": "comparison_only",
+                "allow_metric_drilldown": False,
+            },
+        },
+        missing_slots=[],
+        source_message_ids=["message-1"],
+    )
+
+    async def _replace(*_args: object, **_kwargs: object) -> TaskRelationshipDecision:
+        return TaskRelationshipDecision("replace", ("analysis_goal",), 0.95, "改为归因", "llm")
+
+    async def _resolved(*_args: object, **_kwargs: object) -> TemporalResolution:
+        return TemporalResolution(
+            "resolved",
+            (("错误的新范围", date(2026, 9, 11), date(2026, 9, 17)),),
+            source="llm",
+        )
+
+    monkeypatch.setattr("app.services.conversation_tasks.interpret_task_relationship", _replace)
+    monkeypatch.setattr("app.services.conversation_tasks.resolve_temporal_intent", _resolved)
+    session = _TaskSession([None, task])
+
+    turn = await prepare_conversation_task(
+        session, "conversation-1", "message-2", "保留刚才的时间范围，解释为什么 GMV 下降"
+    )
+
+    assert turn.task is task
+    assert task.status == TASK_READY
+    assert task.revision == 2
+    assert task.effective_constraints["periods"] == [
+        {"label": "本期", "start_date": "2026-09-14", "end_date": "2026-09-16"},
+        {"label": "上期", "start_date": "2026-09-07", "end_date": "2026-09-09"},
+    ]
+    assert task.effective_constraints["execution_intent"]["operation"] == "causal_analysis"
+    assert task.route_mode == "hybrid"
+
+
+@pytest.mark.asyncio
+async def test_replacement_uses_structured_new_task_input_not_cancelled_task_words(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    old_task = ConversationTask(
+        conversation_id="conversation-1",
+        task_type=TASK_REVIEW,
+        status=TASK_COMPLETED,
+        route_mode="hybrid",
+        revision=1,
+        task_frame={"base_question": "复盘 618 活动", "supplements": []},
+        effective_constraints={"analysis_goal": "活动复盘", "metrics": ["paid_gmv"]},
+        missing_slots=[],
+        source_message_ids=["message-1"],
+    )
+    replacement = "比较七夕和 618 的日均 GMV、支付转化率差异"
+
+    async def _replace(*_args: object, **_kwargs: object) -> TaskRelationshipDecision:
+        return TaskRelationshipDecision(
+            "replace",
+            ("task_type", "metric", "comparison", "time_range"),
+            0.95,
+            "旧复盘已被新的活动比较替换",
+            "llm",
+            replacement,
+        )
+
+    async def _resolve(_session: object, question: str, **_kwargs: object) -> TemporalResolution:
+        if "七夕" in question and "618" in question:
+            return TemporalResolution(
+                "resolved",
+                (
+                    ("七夕", date(2026, 8, 10), date(2026, 8, 22)),
+                    ("618", date(2026, 6, 1), date(2026, 6, 20)),
+                ),
+                source="local_gate",
+            )
+        return TemporalResolution("no_time", source="local_gate")
+
+    monkeypatch.setattr("app.services.conversation_tasks.interpret_task_relationship", _replace)
+    monkeypatch.setattr("app.services.conversation_tasks.resolve_temporal_intent", _resolve)
+    session = _TaskSession([None, old_task])
+
+    turn = await prepare_conversation_task(
+        session,
+        "conversation-1",
+        "message-2",
+        "取消这个复盘，改为比较七夕和 618 的日均 GMV、支付转化率差异。",
+    )
+
+    assert old_task.status == "superseded"
+    assert turn.task.task_frame["base_question"] == replacement
+    assert "analysis_goal" not in turn.task.effective_constraints
+    assert turn.task.effective_constraints["execution_intent"] == {
+        "operation": "comparison",
+        "evidence_sources": ["metrics"],
+        "output_scope": "comparison_only",
+        "allow_metric_drilldown": False,
+    }

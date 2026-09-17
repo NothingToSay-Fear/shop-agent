@@ -1,8 +1,10 @@
 import pytest
 
 from app.agent.data_query_agent import DATA_QUERY_AGENT_NAME, DataQueryAgent
+from app.agent.tools import AgentToolTracker
 from app.services.conversation_context import ConversationContextSnapshot
 from app.services.data_query_planner import build_data_query_plan
+from app.services.metric_rag import MetricQueryContext
 
 
 def test_explicit_task_metrics_are_a_complete_execution_contract() -> None:
@@ -104,3 +106,26 @@ async def test_data_query_agent_executes_only_the_structured_metric_plan() -> No
     assert tool.payload["query_periods"] == [
         {"label": "618", "start_date": "2026-06-01", "end_date": "2026-06-18"}
     ]
+
+
+def test_plain_comparison_does_not_authorize_driver_drilldown() -> None:
+    agent = DataQueryAgent(
+        {
+            "metrics": ["paid_gmv"],
+            "execution_intent": {
+                "operation": "comparison",
+                "evidence_sources": ["metrics"],
+                "output_scope": "comparison_only",
+                "allow_metric_drilldown": False,
+            },
+        },
+        "对比 GMV",
+        driver_graph={"paid_gmv": ("visitor_count",)},
+    )
+
+    observation = agent.observe(
+        AgentToolTracker(metric_context=MetricQueryContext("指标结果", ("paid_gmv",)))
+    )
+
+    assert observation.sufficient is True
+    assert observation.next_metric_codes == ()

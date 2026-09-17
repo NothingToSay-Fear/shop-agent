@@ -60,11 +60,14 @@ from app.services.conversation_tasks import (
     task_constraint_audit,
 )
 from app.services.task_plans import (
+    PlanExecutionController,
     complete_task_plan,
     ensure_task_plan,
     fail_task_plan,
+    load_executable_actions,
     start_task_plan,
 )
+from app.services.metric_analysis_graph import load_metric_analysis_driver_graph
 from app.services.authentication import get_current_user
 from app.services.user_memory import MemoryService
 
@@ -221,7 +224,9 @@ async def create_message(
     task_turn = await prepare_conversation_task(
         session, conversation_id, user_message.id, payload.content
     )
-    task_plan = await ensure_task_plan(session, task_turn.task)
+    delegation_plan = MainAgentOrchestrator().plan(task_turn.task)
+    task_plan = await ensure_task_plan(session, task_turn.task, delegation_plan)
+    await session.commit()
     task_audit = task_constraint_audit(task_turn.task)
     if task_turn.requires_clarification:
         return StreamingResponse(
@@ -236,8 +241,11 @@ async def create_message(
             headers={"Cache-Control": "no-cache"},
         )
     await start_task_plan(session, task_plan)
-    data_query_agent = DataQueryAgent(task_turn.task.effective_constraints, payload.content)
-    delegation_plan = MainAgentOrchestrator().plan(task_turn.task)
+    driver_graph = await load_metric_analysis_driver_graph(session)
+    data_query_agent = DataQueryAgent(
+        task_turn.task.effective_constraints, payload.content, driver_graph=driver_graph
+    )
+    plan_actions = await load_executable_actions(session, task_plan)
     memory_context = await MemoryService.retrieve_for_query(session, current_user.id, payload.content)
     await MemoryService.record_context_usage(session, current_user.id, memory_context)
     summary_context = await retrieve_summary_for_generation(session, conversation_id)
@@ -263,6 +271,7 @@ async def create_message(
     )
     session.add(run)
     await session.commit()
+    plan_controller = PlanExecutionController(session, task_plan)
 
     agent = OperationAgent()
     started_at = perf_counter()
@@ -281,6 +290,8 @@ async def create_message(
                 route_override=task_turn.route_override,
                 data_query_agent=data_query_agent,
                 delegation_plan=delegation_plan,
+                plan_actions=plan_actions,
+                plan_controller=plan_controller,
             ):
                 if event.event_type == "status":
                     yield _event("status", {"content": event.content, "phase": event.phase or ""})

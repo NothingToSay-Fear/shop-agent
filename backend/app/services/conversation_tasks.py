@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import ConversationTask, ConversationTaskEvent
 from app.services.activity_periods import resolve_activity_periods
 from app.services.data_query_planner import build_data_query_plan
+from app.services.date_ranges import parse_explicit_date_ranges
 from app.services.metric_analysis_graph import load_metric_analysis_driver_graph
 from app.services.intent_router import RetrievalRoute
 from app.services.task_interpreter import TaskRelationshipDecision, interpret_task_relationship
@@ -41,6 +42,9 @@ _KNOWLEDGE_MARKERS = ("资料", "文档", "规则", "玩法", "手册", "复盘"
 _CAUSAL_MARKERS = ("为什么", "为何", "原因", "归因", "下滑原因", "下降原因")
 _FRAME_TEXT_LIMIT = 1200
 _MAX_SUPPLEMENTS = 3
+_INHERITANCE_MARKERS = ("保留", "沿用", "刚才", "上面", "上述", "原来的", "同一范围")
+_TIME_OVERRIDE_MARKERS = ("改为", "换成", "切换为", "调整为")
+_RELATIVE_TIME_MARKERS = ("本周", "这周", "上周", "本月", "这个月", "上月", "上个月", "本季度", "上季度")
 
 
 @dataclass(frozen=True)
@@ -93,6 +97,16 @@ async def prepare_conversation_task(
         )
 
     decision = await interpret_task_relationship(active_task, question)
+    if _requires_constraint_inheritance(question):
+        # 分析目标可以升级，但明确沿用范围时不能将同一任务替换掉。
+        decision = TaskRelationshipDecision(
+            "revise",
+            tuple(slot for slot in decision.changed_slots if slot != "time_range"),
+            1.0,
+            "用户明确要求继承已确认范围，仅更新本轮分析要求",
+            "fallback",
+        )
+        temporal_resolution = TemporalResolution("no_time", source="local_gate")
     _record_task_interpretation(active_task, source_message_id, decision)
 
     if decision.relation == "cancel":
@@ -110,8 +124,14 @@ async def prepare_conversation_task(
         active_task.status = TASK_SUPERSEDED
         active_task.completed_at = datetime.now(UTC)
         _record_task_event(session, active_task, "superseded", source_message_id, decision)
+        replacement_input = decision.next_task_input or question
+        replacement_temporal = await resolve_temporal_intent(
+            session,
+            replacement_input,
+            task_context=None,
+        )
         return await _create_new_task(
-            session, conversation_id, source_message_id, question, temporal_resolution
+            session, conversation_id, source_message_id, replacement_input, replacement_temporal
         )
 
     return await _merge_into_existing_task(
@@ -194,14 +214,14 @@ async def _create_new_task(
     temporal_resolution: TemporalResolution,
 ) -> ConversationTaskTurn:
     task_type = _infer_task_type(question)
-    constraints = _merge_constraints({}, question, temporal_resolution)
+    constraints = _merge_constraints({}, question, temporal_resolution, task_type)
     constraints = await _attach_data_query_plan(session, task_type, constraints, question)
     pending_questions = _pending_questions(constraints, temporal_resolution)
     task = ConversationTask(
         conversation_id=conversation_id,
         task_type=task_type,
         status=TASK_WAITING_CLARIFICATION if pending_questions else TASK_READY,
-        route_mode="metrics" if task_type == TASK_METRIC_COMPARISON else None,
+        route_mode=_route_mode_for_constraints(constraints),
         revision=1,
         task_frame={
             "base_question": _truncate(question),
@@ -234,12 +254,15 @@ async def _merge_into_existing_task(
     if task.task_type == TASK_HYBRID_ANALYSIS:
         # 因果追问不能继续沿用上一轮纯指标对比的 metrics 路由。
         task.route_mode = "hybrid"
-    constraints = _merge_constraints(_constraints_from_task(task), question, temporal_resolution)
+    constraints = _merge_constraints(
+        _constraints_from_task(task), question, temporal_resolution, task.task_type
+    )
     constraints = await _attach_data_query_plan(session, task.task_type, constraints, question)
     pending_questions = _pending_questions(constraints, temporal_resolution)
 
     task.revision = max(task.revision or 1, 1) + 1
     task.effective_constraints = constraints
+    task.route_mode = _route_mode_for_constraints(constraints)
     task.pending_questions = pending_questions
     task.missing_slots = ["时间范围或数据类型"] if pending_questions else []
     task.source_message_ids = _append_message_id(task.source_message_ids, source_message_id)
@@ -287,7 +310,10 @@ def _turn_from_task(task: ConversationTask, temporal_resolution: TemporalResolut
 
 
 def _merge_constraints(
-    existing: dict[str, object], question: str, temporal_resolution: TemporalResolution
+    existing: dict[str, object],
+    question: str,
+    temporal_resolution: TemporalResolution,
+    task_type: str,
 ) -> dict[str, object]:
     """执行 KEEP / REPLACE / ASK：只有 resolved 覆盖时间；clarify 不破坏旧值。"""
     constraints = dict(existing)
@@ -300,7 +326,77 @@ def _merge_constraints(
     analysis_goal = _extract_analysis_goal(question)
     if analysis_goal:
         constraints["analysis_goal"] = analysis_goal
+    constraints["execution_intent"] = _execution_intent(task_type, constraints, question)
     return constraints
+
+
+def _execution_intent(
+    task_type: str, constraints: dict[str, object], question: str
+) -> dict[str, object]:
+    """将输出目标、证据来源和下钻授权分别保存，避免单一 task_type 覆盖混合意图。"""
+    lowered = question.lower()
+    analysis_goal = constraints.get("analysis_goal")
+    is_review = task_type == TASK_REVIEW or analysis_goal == "活动复盘"
+    is_diagnose = task_type == TASK_HYBRID_ANALYSIS or analysis_goal == "经营归因"
+    has_knowledge_request = any(marker in lowered for marker in _KNOWLEDGE_MARKERS)
+    needs_metrics = task_type != TASK_KNOWLEDGE_QA
+    needs_knowledge = has_knowledge_request or is_review or task_type == TASK_HYBRID_ANALYSIS
+
+    if is_review:
+        operation = "review"
+        output_scope = "review"
+    elif is_diagnose:
+        operation = "causal_analysis"
+        output_scope = "diagnose"
+    elif task_type == TASK_METRIC_COMPARISON:
+        operation = "comparison"
+        output_scope = "comparison_only"
+    else:
+        operation = "lookup"
+        output_scope = "lookup_only"
+
+    sources: list[str] = []
+    if needs_metrics:
+        sources.append("metrics")
+    if needs_knowledge:
+        sources.append("knowledge")
+    return {
+        "operation": operation,
+        "evidence_sources": sources,
+        "output_scope": output_scope,
+        "allow_metric_drilldown": output_scope in {"diagnose", "review"},
+    }
+
+
+def _route_mode_for_constraints(constraints: dict[str, object]) -> str | None:
+    intent = constraints.get("execution_intent")
+    sources = intent.get("evidence_sources") if isinstance(intent, dict) else []
+    if not isinstance(sources, list):
+        return None
+    has_metrics = "metrics" in sources
+    has_knowledge = "knowledge" in sources
+    if has_metrics and has_knowledge:
+        return "hybrid"
+    if has_metrics:
+        return "metrics"
+    if has_knowledge:
+        return "knowledge"
+    return None
+
+
+def _requires_constraint_inheritance(question: str) -> bool:
+    """明确沿用旧条件时，以字段继承优先于关系模型的 replace 判断。"""
+    lowered = question.lower()
+    if "取消" in question or "停止" in question:
+        return False
+    if not any(marker in question for marker in _INHERITANCE_MARKERS):
+        return False
+    if parse_explicit_date_ranges(question):
+        return False
+    has_relative_time_override = any(marker in lowered for marker in _RELATIVE_TIME_MARKERS) and any(
+        marker in question for marker in _TIME_OVERRIDE_MARKERS
+    )
+    return not has_relative_time_override
 
 
 async def _attach_data_query_plan(
@@ -369,6 +465,7 @@ def _record_task_interpretation(
         "confidence": decision.confidence,
         "reason": decision.reason,
         "source": decision.source,
+        "uses_next_task_input": decision.next_task_input is not None,
     }
     task.task_frame = frame
 

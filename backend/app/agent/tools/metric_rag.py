@@ -71,7 +71,15 @@ def build_metric_rag_tool(
                         constraints=constraints,
                         prepared_queries=prepared_queries,
                     )
-            tracker.metric_context = context
+            if context is not None and tracker.metric_context is not None:
+                previous = tracker.metric_context
+                tracker.metric_context = type(context)(
+                    text=f"{previous.text}\n\n【补充指标查询】\n{context.text}",
+                    metric_codes=tuple(dict.fromkeys((*previous.metric_codes, *context.metric_codes))),
+                    query_units=tuple(dict.fromkeys((*previous.query_units, *context.query_units))),
+                )
+            else:
+                tracker.metric_context = context
             if context is None:
                 tracker.record_tool_call(
                     tool_name="query_metric_rag",

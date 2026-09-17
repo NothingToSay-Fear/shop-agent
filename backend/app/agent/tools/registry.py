@@ -19,7 +19,7 @@ class ToolSpecification:
 
 TOOL_REGISTRY: dict[ToolName, ToolSpecification] = {
     "query_metric_rag": ToolSpecification(
-        name="query_metric_rag", max_calls_per_run=1, reference_prefixes=("metric:",)
+        name="query_metric_rag", max_calls_per_run=3, reference_prefixes=("metric:",)
     ),
     "query_knowledge_rag": ToolSpecification(
         name="query_knowledge_rag", max_calls_per_run=1, reference_prefixes=("knowledge_chunk:",)

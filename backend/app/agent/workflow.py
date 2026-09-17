@@ -10,7 +10,7 @@ from langchain_core.tools import BaseTool
 from app.agent.answer_generator import AnswerGenerator
 from app.agent.data_query_agent import DataQueryAgent
 from app.agent.review_agent import ReviewAgent
-from app.agent.task_orchestrator import DelegationPlan
+from app.agent.task_orchestrator import DelegationPlan, MainAgentOrchestrator
 from app.agent.execution_plan import ExecutionPlan, build_execution_plan, validate_execution_plan
 from app.agent.prompt_builder import PromptBuilder
 from app.agent.tools import AgentToolTracker, build_agent_tools
@@ -24,6 +24,7 @@ from app.services.conversation_history import ConversationHistoryContext
 from app.services.intent_router import RetrievalMode, RetrievalRoute, route_question
 from app.services.query_expansion import prepare_retrieval_queries
 from app.services.user_memory import UserMemoryContext
+from app.services.task_plans import ExecutablePlanAction, PlanExecutionController
 
 StatusCallback = Callable[[str, str], Awaitable[None]]
 ChunkCallback = Callable[[str], Awaitable[None]]
@@ -59,6 +60,8 @@ class AgentWorkflow:
         data_query_agent: DataQueryAgent | None = None,
         delegation_plan: DelegationPlan | None = None,
         on_chunk: ChunkCallback | None = None,
+        plan_actions: list[ExecutablePlanAction] | None = None,
+        plan_controller: PlanExecutionController | None = None,
     ) -> WorkflowResult:
         """先完成并校验执行计划，再允许模型基于受控结果组织回答。"""
         tracker = AgentToolTracker()
@@ -99,15 +102,29 @@ class AgentWorkflow:
         tools = build_agent_tools(tracker, self.settings, user_id, prepared_queries)
         batch_summary = " → ".join(" + ".join(batch) for batch in delegation_plan.batches) if delegation_plan else plan.summary
         await self._emit_status(on_status, "plan", f"主 Agent 已生成执行批次：{batch_summary}")
-        await self._run_execution_plan(
-            tools,
-            retrieval_question,
-            plan,
-            tracker,
-            on_status,
-            active_context,
-            data_query_agent,
-        )
+        pending_final_actions: dict[str, ExecutablePlanAction] = {}
+        if plan_actions is None:
+            await self._run_execution_plan(
+                tools,
+                retrieval_question,
+                plan,
+                tracker,
+                on_status,
+                active_context,
+                data_query_agent,
+            )
+        else:
+            pending_final_actions = await self._run_persisted_actions(
+                tools,
+                retrieval_question,
+                tracker,
+                on_status,
+                active_context,
+                data_query_agent,
+                delegation_plan,
+                plan_actions,
+                plan_controller,
+            )
         await self._emit_status(on_status, "verification", "正在校验检索依据…")
         validation = validate_execution_plan(plan, tracker.tool_calls)
         if not validation.passed:
@@ -118,14 +135,29 @@ class AgentWorkflow:
 
         if delegation_plan is not None and delegation_plan.use_review_agent:
             await self._emit_status(on_status, "review", "正在将已验证证据包委派给复盘子 Agent…")
+            review_action = pending_final_actions.get("review")
+            review_attempt = await self._begin_action(plan_controller, review_action)
             reviewed_answer = await self._generate_review_answer(
                 user_input, tracker.data_context or "本轮没有可用证据。", on_chunk
             )
             if reviewed_answer is not None:
+                await self._finish_action(
+                    plan_controller, review_action, review_attempt, "success", "已基于验证证据生成复盘结论", tracker.reference_ids
+                )
+                synth_action = pending_final_actions.get("synthesize")
+                synth_attempt = await self._begin_action(plan_controller, synth_action)
+                await self._finish_action(
+                    plan_controller, synth_action, synth_attempt, "success", "已形成最终受控结论", tracker.reference_ids
+                )
                 return WorkflowResult(reviewed_answer, tracker.references, tracker)
+            await self._finish_action(
+                plan_controller, review_action, review_attempt, "failed", "复盘子 Agent 未返回结论", (), "review_agent_unavailable"
+            )
 
         if self.settings.llm_enabled:
             await self._emit_status(on_status, "generation", "正在基于已验证依据生成结论…")
+            synth_action = pending_final_actions.get("synthesize")
+            synth_attempt = await self._begin_action(plan_controller, synth_action)
             generation_context = PromptBuilder.execution_instruction(
                 plan,
                 tracker.data_context,
@@ -137,6 +169,9 @@ class AgentWorkflow:
             )
             answer = await self._generate_answer(user_input, generation_context, tools, on_chunk)
             if answer is not None:
+                await self._finish_action(
+                    plan_controller, synth_action, synth_attempt, "success", "已形成最终受控结论", tracker.reference_ids
+                )
                 return WorkflowResult(answer, tracker.references, tracker)
 
             await self._emit_status(on_status, "generation", "模型暂不可用，正在返回已验证依据…")
@@ -144,11 +179,19 @@ class AgentWorkflow:
                 tracker.data_context, model_error=True
             )
             await self._emit_chunk(on_chunk, answer)
+            await self._finish_action(
+                plan_controller, synth_action, synth_attempt, "completed", "模型不可用，已返回验证证据", tracker.reference_ids
+            )
             return WorkflowResult(answer, tracker.references, tracker)
 
         await self._emit_status(on_status, "generation", "LLM 未配置，正在返回已验证依据…")
         answer = self.answer_generator.generate_evidence_response(tracker.data_context)
         await self._emit_chunk(on_chunk, answer)
+        synth_action = pending_final_actions.get("synthesize")
+        synth_attempt = await self._begin_action(plan_controller, synth_action)
+        await self._finish_action(
+            plan_controller, synth_action, synth_attempt, "completed", "LLM 未配置，已返回验证证据", tracker.reference_ids
+        )
         return WorkflowResult(answer, tracker.references, tracker)
 
     async def _generate_answer(
@@ -193,6 +236,185 @@ class AgentWorkflow:
         if retrieval_mode != "hybrid":
             return RetrievalRoute(retrieval_mode, None, 1.0, False)
         return await route_question(user_input, self.settings)
+
+    async def _run_persisted_actions(
+        self,
+        tools: list[BaseTool],
+        user_input: str,
+        tracker: AgentToolTracker,
+        on_status: StatusCallback | None,
+        conversation_context: ConversationContextSnapshot,
+        data_query_agent: DataQueryAgent | None,
+        delegation_plan: DelegationPlan | None,
+        actions: list[ExecutablePlanAction],
+        controller: PlanExecutionController | None,
+    ) -> dict[str, ExecutablePlanAction]:
+        """执行数据库中的 Action 队列，并仅在观察结果允许时追加下一版计划。"""
+        tool_by_name = {item.name: item for item in tools}
+        completed_keys: set[str] = set()
+        deferred: dict[str, ExecutablePlanAction] = {}
+        queue = list(actions)
+        replan_count = 0
+
+        while queue:
+            action = queue.pop(0)
+            if action.action_type in {"review", "synthesize"}:
+                deferred["review" if action.action_type == "review" else "synthesize"] = action
+                continue
+            if any(dependency not in completed_keys for dependency in action.depends_on):
+                attempt = await self._begin_action(controller, action)
+                await self._finish_action(
+                    controller,
+                    action,
+                    attempt,
+                    "skipped",
+                    "前置动作未完成，跳过本动作",
+                )
+                completed_keys.add(action.key)
+                continue
+
+            attempt = await self._begin_action(controller, action)
+            if action.action_type == "confirm_constraints":
+                await self._finish_action(
+                    controller,
+                    action,
+                    attempt,
+                    "completed",
+                    "已使用任务有效约束和能力目录生成执行范围",
+                )
+                completed_keys.add(action.key)
+                continue
+
+            if action.action_type in {"query_metrics", "query_knowledge"}:
+                tool_name = action.tool_name
+                tool = tool_by_name.get(tool_name or "")
+                max_tool_calls = int((controller.plan.budget or {}).get("max_tool_calls", 0)) if controller else 0
+                if max_tool_calls and len(tracker.tool_calls) >= max_tool_calls:
+                    await self._finish_action(
+                        controller, action, attempt, "skipped", "已达到本计划的工具调用预算", (), "tool_budget_exhausted"
+                    )
+                    completed_keys.add(action.key)
+                    continue
+                if tool is None:
+                    await self._finish_action(
+                        controller, action, attempt, "failed", "计划工具未注册", (), "tool_not_registered"
+                    )
+                    completed_keys.add(action.key)
+                    continue
+                await self._emit_status(on_status, "tool", self._tool_start_message(tool_name))
+                call_offset = len(tracker.tool_calls)
+                try:
+                    if action.action_type == "query_metrics" and data_query_agent is not None:
+                        await self._emit_status(
+                            on_status, "data_query_plan", "数据库子 Agent 正在确认指标、时间范围与数据能力…"
+                        )
+                        raw_codes = action.action_input.get("metric_codes")
+                        metric_codes = (
+                            tuple(item for item in raw_codes if isinstance(item, str))
+                            if isinstance(raw_codes, list)
+                            else None
+                        )
+                        await data_query_agent.execute(
+                            tool, user_input, conversation_context, metric_codes=metric_codes
+                        )
+                    else:
+                        await tool.ainvoke({"question": user_input})
+                except Exception:
+                    pass
+                latest = next(
+                    (item for item in reversed(tracker.tool_calls[call_offset:]) if item.tool_name == tool_name),
+                    None,
+                )
+                if latest is None:
+                    await self._finish_action(
+                        controller, action, attempt, "failed", "工具未返回可审计结果", (), "missing_tool_audit"
+                    )
+                else:
+                    await self._finish_action(
+                        controller,
+                        action,
+                        attempt,
+                        latest.status,
+                        latest.result_summary,
+                        latest.reference_ids,
+                        latest.error_code,
+                    )
+                await self._emit_status(on_status, "tool", self._tool_finish_message(tool_name, tracker))
+                completed_keys.add(action.key)
+                continue
+
+            if action.action_type == "evaluate_evidence":
+                observation = data_query_agent.observe(tracker) if data_query_agent is not None else None
+                if observation is None:
+                    summary = "未配置数据库子 Agent，无法提出下一步数据动作"
+                elif observation.blocked_by_capability:
+                    summary = observation.reason + "；" + "；".join(observation.blocked_by_capability)
+                else:
+                    summary = observation.reason
+                await self._finish_action(controller, action, attempt, "completed", summary, tracker.reference_ids)
+                completed_keys.add(action.key)
+                if (
+                    observation is not None
+                    and observation.next_metric_codes
+                    and delegation_plan is not None
+                    and controller is not None
+                ):
+                    proposed = MainAgentOrchestrator().replan(
+                        delegation_plan,
+                        next_metric_codes=observation.next_metric_codes,
+                        reason=observation.reason,
+                    )
+                    if proposed:
+                        await self._emit_status(on_status, "replan", "主 Agent 已根据证据追加下一批数据验证动作…")
+                        pending = await controller.append_replan(proposed, observation.reason)
+                        replan_count += 1
+                        # 已延后的最终动作将由最后一版计划重新读取；只追加新的调查动作。
+                        queue = [
+                            item
+                            for item in pending
+                            if item.key not in completed_keys
+                            and item.action_type not in {"review", "synthesize"}
+                        ]
+                        for item in pending:
+                            if item.action_type in {"review", "synthesize"}:
+                                deferred["review" if item.action_type == "review" else "synthesize"] = item
+                continue
+
+            await self._finish_action(
+                controller, action, attempt, "failed", "不支持的计划动作", (), "unsupported_plan_action"
+            )
+            completed_keys.add(action.key)
+
+        return deferred
+
+    @staticmethod
+    async def _begin_action(
+        controller: PlanExecutionController | None, action: ExecutablePlanAction | None
+    ) -> object | None:
+        if controller is None or action is None:
+            return None
+        return await controller.begin(action)
+
+    @staticmethod
+    async def _finish_action(
+        controller: PlanExecutionController | None,
+        action: ExecutablePlanAction | None,
+        attempt: object | None,
+        status: str,
+        result_summary: str,
+        evidence_references: tuple[str, ...] = (),
+        error_message: str | None = None,
+    ) -> None:
+        if controller is None or action is None or attempt is None:
+            return
+        await controller.finish(
+            action,
+            attempt,  # type: ignore[arg-type]
+            status=status,
+            result_summary=result_summary,
+            evidence_references=evidence_references,
+            error_message=error_message,
+        )
 
     @staticmethod
     async def _run_execution_plan(

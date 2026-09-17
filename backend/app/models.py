@@ -212,6 +212,9 @@ class TaskPlan(Base, TimestampMixin):
     revision: Mapped[int] = mapped_column(Integer, nullable=False)
     status: Mapped[str] = mapped_column(String(30), nullable=False, default="ready", index=True)
     summary: Mapped[str] = mapped_column(String(300), nullable=False)
+    plan_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    budget: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False, default=dict)
+    planning_context: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False, default=dict)
 
 
 class TaskPlanStep(Base, TimestampMixin):
@@ -226,12 +229,40 @@ class TaskPlanStep(Base, TimestampMixin):
     )
     step_key: Mapped[str] = mapped_column(String(50), nullable=False)
     title: Mapped[str] = mapped_column(String(200), nullable=False)
+    action_type: Mapped[str] = mapped_column(String(50), nullable=False, default="tool")
     tool_name: Mapped[str | None] = mapped_column(String(80), nullable=True)
     depends_on: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    action_input: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False, default=dict)
+    expected_output: Mapped[str | None] = mapped_column(Text, nullable=True)
+    capability_requirement: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False, default=dict)
+    condition: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False, default=dict)
+    plan_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    ordinal: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     status: Mapped[str] = mapped_column(String(30), nullable=False, default="pending", index=True)
     result_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     evidence_references: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class TaskPlanStepAttempt(Base):
+    """一个计划动作的一次执行尝试；步骤可重试或因重规划产生后续动作。"""
+
+    __tablename__ = "task_plan_step_attempts"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    step_id: Mapped[str] = mapped_column(
+        ForeignKey("task_plan_steps.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    attempt_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(30), nullable=False, index=True)
+    input_snapshot: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False, default=dict)
+    result_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    evidence_references: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 

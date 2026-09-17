@@ -19,6 +19,7 @@ class DataQueryPlan:
     periods: tuple[tuple[str, str, str], ...] = ()
     dimensions: tuple[str, ...] = ()
     unsupported_requirements: tuple[str, ...] = ()
+    allow_metric_drilldown: bool = False
 
     @property
     def capability_notes(self) -> tuple[str, ...]:
@@ -39,6 +40,7 @@ class DataQueryPlan:
             ],
             "dimensions": list(self.dimensions),
             "unsupported_requirements": list(self.unsupported_requirements),
+            "allow_metric_drilldown": self.allow_metric_drilldown,
         }
 
 
@@ -54,13 +56,21 @@ def build_data_query_plan(
         periods = _period_tuple(persisted.get("periods"))
         dimensions = _string_tuple(persisted.get("dimensions"))
         unsupported = _string_tuple(persisted.get("unsupported_requirements"))
+        allow_metric_drilldown = bool(persisted.get("allow_metric_drilldown", False))
         if metric_codes or periods or dimensions or unsupported:
-            return DataQueryPlan(metric_codes, periods, dimensions, unsupported)
+            return DataQueryPlan(
+                metric_codes,
+                periods,
+                dimensions,
+                unsupported,
+                allow_metric_drilldown,
+            )
 
     metric_codes = _string_tuple(constraints.get("metrics"))
     periods = _period_tuple(constraints.get("periods"))
     lowered = question.lower()
-    if _is_causal_analysis(constraints, lowered):
+    allow_metric_drilldown = _allows_metric_drilldown(constraints, lowered)
+    if allow_metric_drilldown:
         metric_codes = _expand_causal_driver_metrics(metric_codes, driver_graph or {})
     wants_product_refunds = any(marker.lower() in lowered for marker in _PRODUCT_MARKERS) and any(
         marker in lowered for marker in _REFUND_MARKERS
@@ -73,11 +83,19 @@ def build_data_query_plan(
             unsupported_requirements=(
                 "无法按商品/SKU 排序高退款商品，也无法关联订单退款原因或活动规则",
             ),
+            allow_metric_drilldown=allow_metric_drilldown,
         )
-    return DataQueryPlan(metric_codes=metric_codes, periods=periods)
+    return DataQueryPlan(
+        metric_codes=metric_codes,
+        periods=periods,
+        allow_metric_drilldown=allow_metric_drilldown,
+    )
 
 
-def _is_causal_analysis(constraints: Mapping[str, object], lowered_question: str) -> bool:
+def _allows_metric_drilldown(constraints: Mapping[str, object], lowered_question: str) -> bool:
+    execution_intent = constraints.get("execution_intent")
+    if isinstance(execution_intent, dict):
+        return execution_intent.get("allow_metric_drilldown") is True
     return constraints.get("analysis_goal") == "经营归因" or any(
         marker in lowered_question for marker in _CAUSAL_MARKERS
     )
