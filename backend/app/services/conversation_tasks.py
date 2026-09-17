@@ -58,6 +58,19 @@ class ConversationTaskTurn:
         return self.clarification is not None
 
 
+@dataclass(frozen=True)
+class TaskConstraintAudit:
+    """任务执行中实际使用的唯一约束快照。
+
+它不复用 ``ConversationContext``：后者仅为旧会话条件提供兼容存储，不参与任务型问题的
+检索、工具入参或回答生成。
+    """
+
+    summary: str
+    actions: tuple[str, ...]
+    snapshot: dict[str, object]
+
+
 async def prepare_conversation_task(
     session: AsyncSession,
     conversation_id: str,
@@ -116,13 +129,15 @@ async def complete_conversation_task(
         task.route_mode = route.mode
 
 
-async def cancel_open_conversation_tasks(session: AsyncSession, conversation_id: str) -> None:
-    """清除会话条件时取消所有未完成任务，避免旧任务误接收后续输入。"""
+async def cancel_conversation_tasks(session: AsyncSession, conversation_id: str) -> None:
+    """重置会话任务时取消可被后续输入继承的任务。"""
     tasks = list(
         await session.scalars(
             select(ConversationTask).where(
                 ConversationTask.conversation_id == conversation_id,
-                ConversationTask.status.in_((TASK_WAITING_CLARIFICATION, TASK_READY)),
+                ConversationTask.status.in_(
+                    (TASK_WAITING_CLARIFICATION, TASK_READY, TASK_COMPLETED)
+                ),
             )
         )
     )
@@ -130,6 +145,45 @@ async def cancel_open_conversation_tasks(session: AsyncSession, conversation_id:
         task.status = TASK_CANCELLED
         task.completed_at = datetime.now(UTC)
         _record_task_event(session, task, "cancelled", None, None)
+
+
+def task_constraint_audit(task: ConversationTask) -> TaskConstraintAudit:
+    """将任务有效约束作为运行审计快照。
+
+任务型请求只从这个快照派生检索上下文，避免与旧的会话条件记录同时生效。
+    """
+    constraints = _constraints_from_task(task)
+    parts: list[str] = []
+    periods = constraints.get("periods")
+    if isinstance(periods, list):
+        rendered_periods = [
+            f"{item['label']} {item['start_date']} 至 {item['end_date']}"
+            for item in periods
+            if isinstance(item, dict)
+            and all(isinstance(item.get(key), str) for key in ("label", "start_date", "end_date"))
+        ]
+        if rendered_periods:
+            parts.append("时间=" + "；".join(rendered_periods))
+    metrics = constraints.get("metrics")
+    if isinstance(metrics, list) and metrics:
+        parts.append("指标=" + "、".join(str(item) for item in metrics if isinstance(item, str)))
+    analysis_goal = constraints.get("analysis_goal")
+    if isinstance(analysis_goal, str) and analysis_goal:
+        parts.append("目标=" + analysis_goal)
+    activities = constraints.get("activities")
+    if isinstance(activities, list) and activities:
+        parts.append("活动=" + "、".join(str(item) for item in activities if isinstance(item, str)))
+
+    display = "；".join(parts) or "无显式约束"
+    return TaskConstraintAudit(
+        summary=f"本轮执行任务有效约束：{display}",
+        actions=("本轮检索及生成仅使用会话任务的有效约束",),
+        snapshot={
+            "task_id": task.id,
+            "task_revision": task.revision,
+            "effective_constraints": constraints,
+        },
+    )
 
 
 async def _create_new_task(
@@ -345,7 +399,8 @@ def _effective_question(task: ConversationTask) -> str:
     frame = dict(task.task_frame or {})
     base_question = str(frame.get("base_question") or "")
     supplements = [str(item) for item in frame.get("supplements", [])]
-    periods = _constraints_from_task(task).get("periods", [])
+    constraints = _constraints_from_task(task)
+    periods = constraints.get("periods", [])
     parts = [base_question]
     if isinstance(periods, list):
         rendered = "；".join(
@@ -356,6 +411,14 @@ def _effective_question(task: ConversationTask) -> str:
         )
         if rendered:
             parts.append("已确认的受控时间范围：" + rendered)
+    metrics = constraints.get("metrics")
+    if isinstance(metrics, list) and metrics:
+        parts.append("已确认的受控指标：" + "、".join(
+            str(item) for item in metrics if isinstance(item, str)
+        ))
+    analysis_goal = constraints.get("analysis_goal")
+    if isinstance(analysis_goal, str) and analysis_goal:
+        parts.append("已确认的分析目标：" + analysis_goal)
     if supplements:
         parts.append("用户后续补充条件：" + "；".join(supplements))
     return "\n\n".join(part for part in parts if part)

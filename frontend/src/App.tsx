@@ -804,7 +804,7 @@ export function App() {
               {auditRecord.route_fallback && "；已采用保守降级"}
             </Typography.Text>
             <Typography.Text>
-              会话条件：{auditRecord.context_summary ?? "本轮未使用已确认条件"}
+              任务约束：{auditRecord.context_summary ?? "本轮未使用已确认约束"}
             </Typography.Text>
             <Typography.Text>
               长期记忆：{auditRecord.memory_summary ?? "本轮未采用长期记忆"}
@@ -824,7 +824,7 @@ export function App() {
             )}
             {auditRecord.context_actions.length > 0 && (
               <Typography.Text type="secondary">
-                条件变更：{auditRecord.context_actions.join("；")}
+                约束来源：{auditRecord.context_actions.join("；")}
               </Typography.Text>
             )}
             <Typography.Text>

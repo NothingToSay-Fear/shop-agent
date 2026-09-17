@@ -11,7 +11,9 @@ from app.services.conversation_tasks import (
     TASK_REVIEW,
     TASK_WAITING_CLARIFICATION,
     _continue_completed_task,
+    cancel_conversation_tasks,
     prepare_conversation_task,
+    task_constraint_audit,
 )
 from app.services.metric_rag import build_metric_query_plan
 from app.services.activity_periods import resolve_activity_periods
@@ -118,6 +120,64 @@ async def test_causal_metric_comparison_is_an_analysis_task_with_driver_metrics(
         "conversion_rate",
         "average_order_value",
     ]
+
+
+@pytest.mark.asyncio
+async def test_task_constraints_are_the_only_execution_and_audit_source() -> None:
+    session = _TaskSession([None, None])
+
+    turn = await prepare_conversation_task(
+        session,
+        "conversation-1",
+        "message-1",
+        "为什么本周 GMV 比上周低",
+    )
+    audit = task_constraint_audit(turn.task)
+
+    assert "已确认的受控指标：paid_gmv" in turn.effective_question
+    assert "已确认的分析目标：经营归因" in turn.effective_question
+    assert audit.snapshot == {
+        "task_id": turn.task.id,
+        "task_revision": 1,
+        "effective_constraints": turn.task.effective_constraints,
+    }
+    assert audit.actions == ("本轮检索及生成仅使用会话任务的有效约束",)
+
+
+@pytest.mark.asyncio
+async def test_reset_cancels_completed_tasks_that_can_be_inherited() -> None:
+    completed = ConversationTask(
+        conversation_id="conversation-1",
+        task_type=TASK_METRIC_COMPARISON,
+        status=TASK_COMPLETED,
+        task_frame={"base_question": "对比 GMV", "supplements": []},
+        effective_constraints={"metrics": ["paid_gmv"]},
+        missing_slots=[],
+        source_message_ids=["message-1"],
+    )
+    cancelled = ConversationTask(
+        conversation_id="conversation-1",
+        task_type=TASK_METRIC_COMPARISON,
+        status="cancelled",
+        task_frame={"base_question": "旧任务", "supplements": []},
+        missing_slots=[],
+        source_message_ids=["message-0"],
+    )
+
+    class _ResetSession:
+        def __init__(self) -> None:
+            self.added: list[object] = []
+
+        async def scalars(self, _statement: object) -> list[ConversationTask]:
+            return [completed, cancelled]
+
+        def add(self, value: object) -> None:
+            self.added.append(value)
+
+    await cancel_conversation_tasks(_ResetSession(), "conversation-1")  # type: ignore[arg-type]
+
+    assert completed.status == "cancelled"
+    assert cancelled.status == "cancelled"
 
 
 @pytest.mark.asyncio

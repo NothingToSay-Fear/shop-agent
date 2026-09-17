@@ -44,7 +44,6 @@ from app.services.agent_audit import (
     persist_tool_calls,
     update_run_route,
 )
-from app.services.conversation_context import ContextBuildResult, build_and_persist_context
 from app.services.conversation_history import (
     enqueue_history_unit_after_turn,
     retrieve_history_for_generation,
@@ -54,9 +53,11 @@ from app.services.conversation_summary import (
     update_memory_state_after_turn,
 )
 from app.services.conversation_tasks import (
-    cancel_open_conversation_tasks,
+    TaskConstraintAudit,
+    cancel_conversation_tasks,
     complete_conversation_task,
     prepare_conversation_task,
+    task_constraint_audit,
 )
 from app.services.task_plans import (
     complete_task_plan,
@@ -186,7 +187,7 @@ async def reset_conversation_context(
     context = await session.get(ConversationContext, conversation_id)
     if context is not None:
         await session.delete(context)
-    await cancel_open_conversation_tasks(session, conversation_id)
+    await cancel_conversation_tasks(session, conversation_id)
     await session.commit()
 
 
@@ -221,20 +222,14 @@ async def create_message(
         session, conversation_id, user_message.id, payload.content
     )
     task_plan = await ensure_task_plan(session, task_turn.task)
-    context_result = await build_and_persist_context(
-        session,
-        conversation_id,
-        user_message.id,
-        payload.content,
-        reset_time_range=task_turn.temporal_resolution.resets_inherited_range,
-    )
+    task_audit = task_constraint_audit(task_turn.task)
     if task_turn.requires_clarification:
         return StreamingResponse(
             _task_clarification_event_stream(
                 session,
                 conversation_id,
                 user_message.id,
-                context_result,
+                task_audit,
                 task_turn.clarification or "请补充必要条件。",
             ),
             media_type="text/event-stream",
@@ -255,9 +250,9 @@ async def create_message(
         conversation_id=conversation_id,
         user_message_id=user_message.id,
         question_summary=create_question_summary(payload.content),
-        context_summary=context_result.audit_summary,
-        context_actions=list(context_result.audit_actions),
-        context_snapshot=context_result.snapshot.as_audit_snapshot(),
+        context_summary=task_audit.summary,
+        context_actions=list(task_audit.actions),
+        context_snapshot=task_audit.snapshot,
         memory_summary=memory_context.audit_summary,
         memory_ids=memory_context.ids,
         memory_selection=memory_context.audit_selection,
@@ -279,7 +274,6 @@ async def create_message(
             async for event in agent.stream_events(
                 task_turn.effective_question,
                 retrieval_mode=payload.mode,
-                conversation_context=context_result.snapshot,
                 user_memory_context=memory_context,
                 user_id=current_user.id,
                 conversation_summary_context=summary_context,
@@ -484,7 +478,7 @@ async def _task_clarification_event_stream(
     session: AsyncSession,
     conversation_id: str,
     user_message_id: str,
-    context_result: ContextBuildResult,
+    task_audit: TaskConstraintAudit,
     response: str,
 ):
     """把受控的任务补充请求作为普通回答持久化，不提前执行不完整的 RAG 查询。"""
@@ -494,9 +488,9 @@ async def _task_clarification_event_stream(
         user_message_id=user_message_id,
         question_summary="等待补充条件的会话任务",
         route_mode="task_clarification",
-        context_summary=context_result.audit_summary,
-        context_actions=list(context_result.audit_actions),
-        context_snapshot=context_result.snapshot.as_audit_snapshot(),
+        context_summary=task_audit.summary,
+        context_actions=list(task_audit.actions),
+        context_snapshot=task_audit.snapshot,
     )
     session.add(run)
     agent_message = Message(

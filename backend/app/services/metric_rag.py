@@ -11,7 +11,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings, get_settings
 from app.models import DailyMetric, MetricDefinition
-from app.services.metric_analysis_graph import seed_metric_analysis_drivers
 from app.services.business_dates import current_business_date
 from app.services.local_embeddings import embed_texts
 from app.services.activity_periods import ACTIVITY_PERIODS, resolve_activity_periods
@@ -245,7 +244,6 @@ async def seed_metric_definitions(session: AsyncSession) -> None:
             )
         )
     await session.flush()
-    await seed_metric_analysis_drivers(session)
 
 
 async def query_metrics_for_question(
