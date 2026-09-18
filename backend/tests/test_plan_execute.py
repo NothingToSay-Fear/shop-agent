@@ -1,7 +1,7 @@
 from app.agent.data_query_agent import DataQueryAgent
 from app.agent.task_orchestrator import MainAgentOrchestrator
 from app.agent.tools import AgentToolTracker
-from app.services.metric_rag import MetricQueryContext
+from app.services.analytics.metric_rag import MetricQueryContext
 
 
 def test_data_query_agent_proposes_only_unqueried_registered_drivers() -> None:

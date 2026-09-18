@@ -414,7 +414,7 @@ async def _requeue_summary_job(job_id: str, lease_token: str, reason: str) -> No
 
 async def run_summary_worker() -> None:
     """持续消费会话短期状态压缩和历史向量化任务。"""
-    from app.services.conversation_history import (
+    from app.services.conversations.history import (
         claim_next_history_index_job,
         mark_history_index_job_failed,
         process_history_index_job,
@@ -456,7 +456,7 @@ async def _build_summary_payload(previous_summary: str, turns: list[Conversation
 async def _summarize_with_llm(previous_summary: str, turns: list[ConversationMemoryTurn], settings: Settings) -> _SummaryPayload | None:
     """只压缩短期状态；输入来自状态快照而不是 ``messages`` 表。"""
     from langchain_core.messages import HumanMessage, SystemMessage
-    from app.services.llm_factory import LLMProviderFactory
+    from app.services.models.llm_factory import LLMProviderFactory
 
     response = await LLMProviderFactory.create(settings, temperature=0).ainvoke(
         [

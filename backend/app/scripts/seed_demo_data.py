@@ -9,7 +9,7 @@ from sqlalchemy import delete, select
 
 from app.database import SessionLocal, create_tables
 from app.models import DailyMetric, Product
-from app.services.metric_rag import seed_metric_definitions
+from app.services.analytics.metric_rag import seed_metric_definitions
 
 DEMO_PRODUCTS = (
     {

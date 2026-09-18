@@ -17,10 +17,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import Settings, get_settings
 from app.database import SessionLocal
 from app.models import ConversationHistoryIndexJob, ConversationHistoryUnit
-from app.services.conversation_summary import ConversationSummaryContext
-from app.services.hybrid_retrieval import FusedCandidate, reciprocal_rank_fusion, tokenize_for_bm25
-from app.services.local_embeddings import embed_texts
-from app.services.local_reranker import rerank_texts
+from app.services.conversations.summary import ConversationSummaryContext
+from app.services.retrieval.hybrid import FusedCandidate, reciprocal_rank_fusion, tokenize_for_bm25
+from app.services.models.embeddings import embed_texts
+from app.services.models.reranker import rerank_texts
 
 logger = logging.getLogger(__name__)
 

@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_session
-from app.services.metrics import get_metrics_overview
+from app.services.analytics.metrics import get_metrics_overview
 
 router = APIRouter(prefix="/api/metrics", tags=["metrics"])
 

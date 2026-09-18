@@ -25,16 +25,16 @@ from app.models import (
     User,
     UserKnowledgeDocumentSetting,
 )
-from app.seed import seed_demo_data
-from app.services.document_parser import apply_semantic_boundaries, parse_document
-from app.services.conversation_context import (
+from app.scripts.seed_demo_data import seed_demo_data
+from app.services.knowledge.document_parser import apply_semantic_boundaries, parse_document
+from app.services.conversations.context import (
     ConversationContextSnapshot,
     build_context_snapshot,
     build_retrieval_question,
 )
-from app.services.knowledge_rag import trace_knowledge_retrieval
-from app.services.knowledge_search import build_knowledge_retrieval_text, build_knowledge_search_terms
-from app.services.local_embeddings import embed_texts
+from app.services.knowledge.retrieval import trace_knowledge_retrieval
+from app.services.knowledge.search import build_knowledge_retrieval_text, build_knowledge_search_terms
+from app.services.models.embeddings import embed_texts
 
 EVALUATION_USER_ID = "a76336a4-7a04-5a79-a9be-b575c7c03db5"
 EVALUATION_USERNAME = "__rag_evaluation_v1__"

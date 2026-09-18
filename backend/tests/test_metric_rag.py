@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.services.metric_rag import (
+from app.services.analytics.metric_rag import (
     MetricDocument,
     MetricQueryConstraints,
     MetricQueryPlanError,
@@ -85,7 +85,7 @@ async def test_default_period_uses_latest_data_not_later_than_business_today(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """预置的未来演示数据不能被没有日期条件的问题默认查询。"""
-    monkeypatch.setattr("app.services.metric_rag.current_business_date", lambda: date(2026, 9, 15))
+    monkeypatch.setattr("app.services.analytics.metric_rag.current_business_date", lambda: date(2026, 9, 15))
 
     period = await _resolve_period(_LatestDateSession(date(2026, 9, 15)), "查看 GMV")
 

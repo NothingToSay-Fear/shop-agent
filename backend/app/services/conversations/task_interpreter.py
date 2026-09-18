@@ -9,8 +9,8 @@ from typing import Literal
 
 from app.config import Settings, get_settings
 from app.models import ConversationTask
-from app.services.llm_factory import LLMProviderFactory
-from app.services.date_ranges import parse_explicit_date_range
+from app.services.models.llm_factory import LLMProviderFactory
+from app.services.analytics.date_ranges import parse_explicit_date_range
 
 TaskRelation = Literal["continue", "revise", "replace", "cancel"]
 

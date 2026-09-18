@@ -45,22 +45,22 @@ from app.services.agent_audit import (
     persist_tool_calls,
     update_run_route,
 )
-from app.services.conversation_history import (
+from app.services.conversations.history import (
     enqueue_history_unit_after_turn,
     retrieve_history_for_generation,
 )
-from app.services.conversation_summary import (
+from app.services.conversations.summary import (
     retrieve_summary_for_generation,
     update_memory_state_after_turn,
 )
-from app.services.conversation_tasks import (
+from app.services.conversations.tasks import (
     TaskConstraintAudit,
     cancel_conversation_tasks,
     complete_conversation_task,
     prepare_conversation_task,
     task_constraint_audit,
 )
-from app.services.task_plans import (
+from app.services.conversations.task_plans import (
     PlanExecutionController,
     complete_task_plan,
     ensure_task_plan,
@@ -68,9 +68,9 @@ from app.services.task_plans import (
     load_executable_actions,
     start_task_plan,
 )
-from app.services.metric_analysis_graph import load_metric_analysis_driver_graph
+from app.services.analytics.metric_analysis_graph import load_metric_analysis_driver_graph
 from app.services.authentication import get_current_user
-from app.services.user_memory import MemoryService
+from app.services.memory.user_memory import MemoryService
 
 router = APIRouter(prefix="/api/conversations", tags=["conversations"])
 logger = logging.getLogger("uvicorn.error")

@@ -3,7 +3,7 @@
 import asyncio
 import logging
 
-from app.services.conversation_summary import run_summary_worker
+from app.services.conversations.summary import run_summary_worker
 
 
 if __name__ == "__main__":

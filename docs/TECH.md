@@ -82,7 +82,7 @@ SQL 模板存储在表中以便维护指标口径，但执行前必须与后端�
 
 知识库检索的完整阶段为：保留原始问题 → 可选的最多 2 条 Query 改写 → 每条 Query 在 PostgreSQL 中执行 pgvector HNSW 向量候选召回与 GIN 中文分词全文候选召回（各 Top-40）→ 服务端 RRF（`k=60`）融合并按 `knowledge_chunk.id` 去重 → 仅加载最多 30 个候选完整文本进入本地 CrossEncoder 精排 → 过滤分数低于 `0.35` 的片段 → 返回 Top-4 片段。候选 SQL 始终同时限制当前用户、资料勾选状态和资料空间，不能绕过私有资料边界。改写仅影响“找什么资料”，不会改变原始问题或受控指标 SQL 的日期参数；LLM 未配置、改写失败或输出非 JSON 时仅使用原问题。`0.35` 是当前 `BAAI/bge-reranker-base` 的保守初值，应随真实标注评测集的分数分布调整；精排模型未挂载、加载失败时不阻断问答，保留 RRF 排序作为确定性降级。
 
-本地模型未就绪时，文件仍会保存为 `pending_embedding`，不会参与知识库检索。模型下载完成后执行 `python -m app.reindex_embeddings`，可同时重建指标定义向量，并从原始资料重新解析标题、段落、列表、表格和页码范围后重建知识库片段、向量与词面索引。删除资料时，数据库以外键级联删除 `knowledge_chunks`（含向量），随后删除 `uploads/` 中的原文件。
+本地模型未就绪时，文件仍会保存为 `pending_embedding`，不会参与知识库检索。模型下载完成后执行 `python -m app.scripts.rebuild_embeddings`，可同时重建指标定义向量，并从原始资料重新解析标题、段落、列表、表格和页码范围后重建知识库片段、向量与词面索引。删除资料时，数据库以外键级联删除 `knowledge_chunks`（含向量），随后删除 `uploads/` 中的原文件。
 
 资料入库不在上传请求内执行。API 接收文件后，在同一数据库事务中创建 `knowledge_documents` 和 `knowledge_index_jobs`，随后返回 `202 Accepted`；`knowledge-worker` 使用 PostgreSQL 行锁（`FOR UPDATE SKIP LOCKED`）领取任务，支持多个 Worker 并行而不重复处理。任务依次记录 `queued`、`parsing`、`embedding`、`completed` 或 `failed` 状态及已处理片段数；Worker 重启时会将遗留 `running` 任务重新入队。向量按默认 32 个片段一批持久化，文档处于 `processing` 时不参与检索；删除文档后，Worker 在每批提交前检测其状态，避免继续写入已删除资料。临时错误最多重试 3 次并指数退避，解析错误等不可恢复错误直接标记失败。
 
@@ -324,7 +324,7 @@ python -m pytest tests/test_evaluation_suite.py -q
 
 `backend/evaluation/datasets/v1/` 是版本化评测集：固定运营资料位于 `documents/`，指标、知识库、综合、多查询单元、多轮继承和无答案样例以 JSONL 保存。知识依据使用“源文件 + 标题/关键文本锚点”标注，而不是易因重切分变化的 Chunk ID。
 
-`app.evaluate_rag` 会在隔离评测库中创建专用评测用户、写入固定资料并使用生产同一套解析、结构化切分、嵌入、pgvector HNSW、GIN + `ts_rank_cd`、RRF、CrossEncoder、受控 SQL 和 `AgentWorkflow` 执行样例。评测过程不连接 Tavily、不需要 LLM 改写；多 Query 改写在评测中固定关闭，以消除外部模型随机性。每一条样例保留向量候选、全文候选、RRF 候选和最终精排结果对应的来源文件，便于定位召回在哪一层退化。
+`app.scripts.run_rag_evaluation` 会在隔离评测库中创建专用评测用户、写入固定资料并使用生产同一套解析、结构化切分、嵌入、pgvector HNSW、GIN + `ts_rank_cd`、RRF、CrossEncoder、受控 SQL 和 `AgentWorkflow` 执行样例。评测过程不连接 Tavily、不需要 LLM 改写；多 Query 改写在评测中固定关闭，以消除外部模型随机性。每一条样例保留向量候选、全文候选、RRF 候选和最终精排结果对应的来源文件，便于定位召回在哪一层退化。
 
 报告输出以下指标：路由准确率、工具计划准确率、指标选择命中率、向量/全文/RRF 的 Recall@40、精排后的 Recall@4、MRR、nDCG@4、Precision@4、无答案准确率、回答关键事实覆盖率、禁止事实未出现率及端到端 P95 时延。Markdown 报告会在每个数值旁展示中文名称、英文术语、计算含义与“越高/越低越好”的判断方向；JSON 报告同步提供 `metric_definitions`，便于前端或脚本读取。`manifest.json` 定义最低门槛；人工验收某次结果后可使用 `--write-baseline` 写入 `baseline.json`，后续运行若任一已记录指标下降超过 3 个百分点即失败。
 
@@ -333,7 +333,7 @@ python -m pytest tests/test_evaluation_suite.py -q
 docker compose --profile evaluation run --rm evaluation
 
 # 人工核验首份报告后，明确将该次结果写为版本化基线。
-docker compose --profile evaluation run --rm evaluation sh -c "alembic upgrade head && python -m app.evaluate_rag --prepare --write-baseline --output-dir /reports"
+docker compose --profile evaluation run --rm evaluation sh -c "alembic upgrade head && python -m app.scripts.run_rag_evaluation --prepare --write-baseline --output-dir /reports"
 ```
 
 报告写入根目录 `evaluation-reports/`，该目录被 Git 忽略。每条样例还会记录路由置信度、是否因低置信度/低分差保护性降级到 `hybrid`、向量或意图精排的判定原因及各候选得分；因此可以区分“确实需要综合检索”和“保守地多查了一路”。`evaluation-db` 使用独立数据卷，评测脚本仅允许数据库连接串包含 `evaluation` 时执行 `--prepare`；若需要在其他隔离环境写入，必须显式设置 `EVALUATION_ALLOW_DATABASE_WRITE=true`。常规单元回归仍执行：
@@ -378,11 +378,11 @@ Docker Compose 包含六个常驻服务和一个按需工具服务：
 
 Adminer 登录时选择 PostgreSQL，服务器填写 `db`，用户名和数据库名均为 `shop_agent`，密码使用 `.env` 中的 `POSTGRES_PASSWORD`。默认数据库端口不暴露到宿主机，Adminer 通过 Docker 内部网络连接数据库。
 
-API 容器启动时会先执行数据库迁移，再运行 `python -m app.seed`。初始化脚本以增量、幂等方式补齐数据，不覆盖已有记录：通用模拟数据包含 5 个商品、2026 年 1 月 1 日至 12 月 31 日每天的两个通用渠道记录，共 3,650 条；另根据根目录 `test/` 的活动文档补充春季上新活动期数据（GMV 86,400 元、支付订单 312 单）、618 预热/正式/返场期数据（按规则节奏构造的模拟数值）及七夕礼赠活动期的礼盒、组合款渠道数据。全年基础数据与活动专项数据共 3,730 条，可通过 `GET /api/metrics/overview` 查看最近两周汇总。
+API 容器启动时会先执行数据库迁移，再运行 `python -m app.scripts.seed_demo_data`。初始化脚本以增量、幂等方式补齐数据，不覆盖已有记录：通用模拟数据包含 5 个商品、2026 年 1 月 1 日至 12 月 31 日每天的两个通用渠道记录，共 3,650 条；另根据根目录 `test/` 的活动文档补充春季上新活动期数据（GMV 86,400 元、支付订单 312 单）、618 预热/正式/返场期数据（按规则节奏构造的模拟数值）及七夕礼赠活动期的礼盒、组合款渠道数据。全年基础数据与活动专项数据共 3,730 条，可通过 `GET /api/metrics/overview` 查看最近两周汇总。
 
-如需重新生成测试业务数据，可在人工确认后执行 `docker compose exec api python -m app.seed --reset-business-data`。该命令会永久删除 `products` 和 `daily_metrics` 中的全部记录，再写入上述 2026 年模拟商品和指标；不会删除账号、会话、记忆、指标定义或知识库文件，不能用于保留真实业务数据的环境。知识库原始文件保存在 `uploads/` 挂载目录，重建 API 容器不会丢失；不要随意删除该目录。
+如需重新生成测试业务数据，可在人工确认后执行 `docker compose exec api python -m app.scripts.seed_demo_data --reset-business-data`。该命令会永久删除 `products` 和 `daily_metrics` 中的全部记录，再写入上述 2026 年模拟商品和指标；不会删除账号、会话、记忆、指标定义或知识库文件，不能用于保留真实业务数据的环境。知识库原始文件保存在 `uploads/` 挂载目录，重建 API 容器不会丢失；不要随意删除该目录。
 
-本地语义向量与精排模型不随镜像或 Git 仓库提交。首次使用依次执行 `docker compose build api knowledge-worker model-download`、`docker compose run --rm model-download`、`docker compose up -d api knowledge-worker conversation-summary-worker` 和 `docker compose exec api python -m app.reindex_embeddings`。下载工具会将嵌入模型保存到 `models/bge-small-zh-v1.5`、精排模型保存到 `models/bge-reranker-base`，随后均以只读卷挂载给 API 与 Worker；下载完成后重建指标定义，并从原始文件重新解析结构化知识库片段、向量和词面索引。会话 Worker 使用同一嵌入模型为新历史单元异步补齐向量；未配置或不可用时保留全文召回。它仅在已配置 `LLM_API_KEY` 与 `LLM_MODEL` 时使用同一兼容模型服务压缩摘要，否则自动采用确定性降级。需要暂时跳过精排模型时可执行 `docker compose run --rm model-download python -m app.download_embedding_model --skip-reranker`。API 运行期间不会下载模型或调用外部嵌入 API。
+本地语义向量与精排模型不随镜像或 Git 仓库提交。首次使用依次执行 `docker compose build api knowledge-worker model-download`、`docker compose run --rm model-download`、`docker compose up -d api knowledge-worker conversation-summary-worker` 和 `docker compose exec api python -m app.scripts.rebuild_embeddings`。下载工具会将嵌入模型保存到 `models/bge-small-zh-v1.5`、精排模型保存到 `models/bge-reranker-base`，随后均以只读卷挂载给 API 与 Worker；下载完成后重建指标定义，并从原始文件重新解析结构化知识库片段、向量和词面索引。会话 Worker 使用同一嵌入模型为新历史单元异步补齐向量；未配置或不可用时保留全文召回。它仅在已配置 `LLM_API_KEY` 与 `LLM_MODEL` 时使用同一兼容模型服务压缩摘要，否则自动采用确定性降级。需要暂时跳过精排模型时可执行 `docker compose run --rm model-download python -m app.scripts.download_local_models --skip-reranker`。API 运行期间不会下载模型或调用外部嵌入 API。
 
 镜像为 CPU 推理预装 PyTorch CPU 轮子，不会安装 CUDA 运行库；如后续需要 GPU 推理，应单独提供 GPU 镜像与 `LOCAL_EMBEDDING_DEVICE` 配置，而不是在默认镜像中混入 CUDA 依赖。
 

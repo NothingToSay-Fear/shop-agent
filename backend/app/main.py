@@ -8,8 +8,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api import auth, conversations, knowledge, memory_candidates, metrics
 from app.config import get_settings
 from app.database import SessionLocal, close_database, create_tables
-from app.services.local_embeddings import preload_model
-from app.services.local_reranker import preload_reranker_model
+from app.services.models.embeddings import preload_model
+from app.services.models.reranker import preload_reranker_model
 from app.services.agent_audit import cleanup_expired_agent_audits
 
 settings = get_settings()

@@ -2,7 +2,7 @@ from datetime import date
 import pytest
 
 from app.models import ConversationTask
-from app.services.conversation_tasks import (
+from app.services.conversations.tasks import (
     TASK_COMPLETED,
     TASK_HYBRID_ANALYSIS,
     TASK_KNOWLEDGE_QA,
@@ -15,10 +15,10 @@ from app.services.conversation_tasks import (
     prepare_conversation_task,
     task_constraint_audit,
 )
-from app.services.metric_rag import build_metric_query_plan
-from app.services.activity_periods import resolve_activity_periods
-from app.services.task_interpreter import TaskRelationshipDecision, _fallback_decision, _parse_decision
-from app.services.temporal_interpreter import TemporalResolution
+from app.services.analytics.metric_rag import build_metric_query_plan
+from app.services.analytics.activity_periods import resolve_activity_periods
+from app.services.conversations.task_interpreter import TaskRelationshipDecision, _fallback_decision, _parse_decision
+from app.services.conversations.temporal_interpreter import TemporalResolution
 
 
 class _TaskSession:
@@ -73,7 +73,7 @@ def _controlled_temporal_resolution(monkeypatch: pytest.MonkeyPatch) -> None:
             )
         return TemporalResolution("no_time")
 
-    monkeypatch.setattr("app.services.conversation_tasks.resolve_temporal_intent", _resolve)
+    monkeypatch.setattr("app.services.conversations.tasks.resolve_temporal_intent", _resolve)
 
     async def _driver_graph(_session: object) -> dict[str, tuple[str, ...]]:
         return {
@@ -85,7 +85,7 @@ def _controlled_temporal_resolution(monkeypatch: pytest.MonkeyPatch) -> None:
             )
         }
 
-    monkeypatch.setattr("app.services.conversation_tasks.load_metric_analysis_driver_graph", _driver_graph)
+    monkeypatch.setattr("app.services.conversations.tasks.load_metric_analysis_driver_graph", _driver_graph)
 
 
 @pytest.mark.asyncio
@@ -202,8 +202,8 @@ async def test_causal_follow_up_upgrades_a_completed_metric_comparison(
     async def _no_time(*_args: object, **_kwargs: object) -> TemporalResolution:
         return TemporalResolution("no_time", source="local_gate")
 
-    monkeypatch.setattr("app.services.conversation_tasks.interpret_task_relationship", _continue)
-    monkeypatch.setattr("app.services.conversation_tasks.resolve_temporal_intent", _no_time)
+    monkeypatch.setattr("app.services.conversations.tasks.interpret_task_relationship", _continue)
+    monkeypatch.setattr("app.services.conversations.tasks.resolve_temporal_intent", _no_time)
     session = _TaskSession([None, task])
 
     turn = await prepare_conversation_task(
@@ -267,7 +267,7 @@ async def test_completed_legacy_month_task_without_periods_is_rebuilt_on_retry(
     async def _revise(*_args: object, **_kwargs: object) -> TaskRelationshipDecision:
         return TaskRelationshipDecision("revise", ("time_range",), 0.9, "重述原月度任务", "llm")
 
-    monkeypatch.setattr("app.services.conversation_tasks.interpret_task_relationship", _revise)
+    monkeypatch.setattr("app.services.conversations.tasks.interpret_task_relationship", _revise)
     session = _TaskSession([None, legacy_task, date(2026, 9, 15)])
 
     turn = await prepare_conversation_task(
@@ -319,7 +319,7 @@ async def test_semantic_task_interpretation_can_replace_waiting_task_without_key
             "replace", ("time_range", "analysis_goal"), 0.95, "改为独立的月度经营任务", "llm"
         )
 
-    monkeypatch.setattr("app.services.conversation_tasks.interpret_task_relationship", _replace)
+    monkeypatch.setattr("app.services.conversations.tasks.interpret_task_relationship", _replace)
     session = _TaskSession([pending_week_task, None])
 
     turn = await prepare_conversation_task(
@@ -477,8 +477,8 @@ async def test_revise_keeps_confirmed_period_when_current_turn_needs_no_time_cha
     async def _clarify(*_args: object, **_kwargs: object) -> TemporalResolution:
         return TemporalResolution("clarify", clarification="请确认日期范围", source="llm")
 
-    monkeypatch.setattr("app.services.conversation_tasks.interpret_task_relationship", _revise)
-    monkeypatch.setattr("app.services.conversation_tasks.resolve_temporal_intent", _clarify)
+    monkeypatch.setattr("app.services.conversations.tasks.interpret_task_relationship", _revise)
+    monkeypatch.setattr("app.services.conversations.tasks.resolve_temporal_intent", _clarify)
     session = _TaskSession([None, task])
 
     turn = await prepare_conversation_task(
@@ -532,8 +532,8 @@ async def test_explicitly_preserved_range_cannot_be_replaced_when_goal_changes(
             source="llm",
         )
 
-    monkeypatch.setattr("app.services.conversation_tasks.interpret_task_relationship", _replace)
-    monkeypatch.setattr("app.services.conversation_tasks.resolve_temporal_intent", _resolved)
+    monkeypatch.setattr("app.services.conversations.tasks.interpret_task_relationship", _replace)
+    monkeypatch.setattr("app.services.conversations.tasks.resolve_temporal_intent", _resolved)
     session = _TaskSession([None, task])
 
     turn = await prepare_conversation_task(
@@ -590,8 +590,8 @@ async def test_replacement_uses_structured_new_task_input_not_cancelled_task_wor
             )
         return TemporalResolution("no_time", source="local_gate")
 
-    monkeypatch.setattr("app.services.conversation_tasks.interpret_task_relationship", _replace)
-    monkeypatch.setattr("app.services.conversation_tasks.resolve_temporal_intent", _resolve)
+    monkeypatch.setattr("app.services.conversations.tasks.interpret_task_relationship", _replace)
+    monkeypatch.setattr("app.services.conversations.tasks.resolve_temporal_intent", _resolve)
     session = _TaskSession([None, old_task])
 
     turn = await prepare_conversation_task(

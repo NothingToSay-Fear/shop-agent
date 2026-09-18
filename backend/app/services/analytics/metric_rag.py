@@ -12,12 +12,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings, get_settings
 from app.models import DailyMetric, MetricDefinition, Product
-from app.services.business_dates import current_business_date
-from app.services.local_embeddings import embed_texts
-from app.services.activity_periods import ACTIVITY_PERIODS, resolve_activity_periods
-from app.services.date_ranges import parse_explicit_date_range, parse_explicit_date_ranges
-from app.services.hybrid_retrieval import hybrid_retrieve
-from app.services.query_expansion import (
+from app.services.analytics.business_dates import current_business_date
+from app.services.models.embeddings import embed_texts
+from app.services.analytics.activity_periods import ACTIVITY_PERIODS, resolve_activity_periods
+from app.services.analytics.date_ranges import parse_explicit_date_range, parse_explicit_date_ranges
+from app.services.retrieval.hybrid import hybrid_retrieve
+from app.services.retrieval.query_expansion import (
     PreparedRetrievalQueries,
     embed_expanded_queries,
     expand_queries,

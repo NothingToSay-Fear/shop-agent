@@ -9,13 +9,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import ConversationTask, ConversationTaskEvent
-from app.services.activity_periods import resolve_activity_periods
-from app.services.data_query_planner import build_data_query_plan
-from app.services.date_ranges import parse_explicit_date_ranges
-from app.services.metric_analysis_graph import load_metric_analysis_driver_graph
+from app.services.analytics.activity_periods import resolve_activity_periods
+from app.services.analytics.data_query_planner import build_data_query_plan
+from app.services.analytics.date_ranges import parse_explicit_date_ranges
+from app.services.analytics.metric_analysis_graph import load_metric_analysis_driver_graph
 from app.services.intent_router import RetrievalRoute
-from app.services.task_interpreter import TaskRelationshipDecision, interpret_task_relationship
-from app.services.temporal_interpreter import TemporalResolution, resolve_temporal_intent
+from app.services.conversations.task_interpreter import TaskRelationshipDecision, interpret_task_relationship
+from app.services.conversations.temporal_interpreter import TemporalResolution, resolve_temporal_intent
 
 TASK_WAITING_CLARIFICATION = "waiting_clarification"
 TASK_READY = "ready"

@@ -2,7 +2,7 @@
 
 import pytest
 
-from app.services.knowledge_rag import query_knowledge_for_question
+from app.services.knowledge.retrieval import query_knowledge_for_question
 
 
 @pytest.mark.asyncio

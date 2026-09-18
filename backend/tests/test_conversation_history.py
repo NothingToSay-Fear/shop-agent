@@ -1,6 +1,6 @@
 """验证会话内历史 RAG 的上下文边界和轻量索引文本。"""
 
-from app.services.conversation_history import (
+from app.services.conversations.history import (
     ConversationHistoryContext,
     _build_tsquery_text,
     _build_unit_content,

@@ -8,9 +8,9 @@ from pathlib import Path
 import pytest
 
 from app.config import Settings
-from app.services.hybrid_retrieval import hybrid_retrieve
-from app.services.local_embeddings import embed_texts
-from app.services.metric_rag import (
+from app.services.retrieval.hybrid import hybrid_retrieve
+from app.services.models.embeddings import embed_texts
+from app.services.analytics.metric_rag import (
     METRIC_DEFINITION_SEEDS,
     MetricDocument,
     cosine_similarity,

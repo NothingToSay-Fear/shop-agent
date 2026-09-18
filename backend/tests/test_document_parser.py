@@ -1,6 +1,6 @@
 import pytest
 
-from app.services.document_parser import apply_semantic_boundaries, parse_document
+from app.services.knowledge.document_parser import apply_semantic_boundaries, parse_document
 
 
 def test_text_document_is_split_into_searchable_chunks() -> None:

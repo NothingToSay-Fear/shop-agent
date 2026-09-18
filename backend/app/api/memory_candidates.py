@@ -10,7 +10,7 @@ from app.database import get_session
 from app.models import Conversation, User, UserMemoryCandidate
 from app.schemas.memory import UserMemoryCandidateRead
 from app.services.authentication import get_current_user
-from app.services.user_memory import MemoryService
+from app.services.memory.user_memory import MemoryService
 
 router = APIRouter(prefix="/api/memory-candidates", tags=["memory-candidates"])
 

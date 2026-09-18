@@ -8,7 +8,7 @@ from app.agent.tools.tracker import AgentToolTracker
 from app.agent.tools.registry import get_tool_specification
 from app.config import Settings
 from app.database import SessionLocal
-from app.services.metric_rag import (
+from app.services.analytics.metric_rag import (
     MetricQueryConstraints,
     MetricQueryPlan,
     MetricQueryPlanError,
@@ -16,7 +16,7 @@ from app.services.metric_rag import (
     query_metrics_for_codes,
     query_metrics_for_question,
 )
-from app.services.query_expansion import PreparedRetrievalQueries
+from app.services.retrieval.query_expansion import PreparedRetrievalQueries
 
 
 def build_metric_rag_tool(

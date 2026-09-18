@@ -89,7 +89,7 @@ services:
     volumes:
       - ./models:/models:ro
       - ./uploads:/uploads:ro
-    command: ["python", "-m", "app.knowledge_worker"]
+    command: ["python", "-m", "app.workers.knowledge_index_worker"]
 
   conversation-summary-worker:
     # 会话摘要不占用流式问答请求；Worker 从 PostgreSQL 领取排队任务并异步压缩历史讨论。
@@ -117,7 +117,7 @@ services:
         condition: service_healthy
     volumes:
       - ./models:/models:ro
-    command: ["python", "-m", "app.conversation_summary_worker"]
+    command: ["python", "-m", "app.workers.conversation_summary_worker"]
 
   frontend:
     build:
@@ -152,7 +152,7 @@ services:
     # 该一次性工具服务使用可写挂载；API 服务始终以只读方式读取模型文件。
     volumes:
       - ./models:/models
-    command: ["python", "-m", "app.download_embedding_model"]
+    command: ["python", "-m", "app.scripts.download_local_models"]
 
   evaluation-db:
     # 评测库与业务库完全隔离，允许评测脚本反复重建固定语料而不影响用户数据。
@@ -193,7 +193,7 @@ services:
       # 仅 --write-baseline 会改写该版本化数据集中的 baseline.json。
       - ./backend/evaluation:/app/evaluation
       - ./evaluation-reports:/reports
-    command: ["sh", "-c", "alembic upgrade head && python -m app.evaluate_rag --prepare --output-dir /reports"]
+    command: ["sh", "-c", "alembic upgrade head && python -m app.scripts.run_rag_evaluation --prepare --output-dir /reports"]
 
 volumes:
   postgres_data:

@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from typing import Mapping
 
 from app.models import ConversationTask
-from app.services.conversation_tasks import TASK_HYBRID_ANALYSIS, TASK_METRIC_COMPARISON, TASK_REVIEW
+from app.services.conversations.tasks import TASK_HYBRID_ANALYSIS, TASK_METRIC_COMPARISON, TASK_REVIEW
 
 
 @dataclass(frozen=True)

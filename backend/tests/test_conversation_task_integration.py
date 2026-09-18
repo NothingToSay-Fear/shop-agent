@@ -6,15 +6,15 @@ import pytest
 
 from app.database import SessionLocal
 from app.models import Conversation, User
-from app.services.conversation_tasks import prepare_conversation_task
-from app.services.metric_rag import (
+from app.services.conversations.tasks import prepare_conversation_task
+from app.services.analytics.metric_rag import (
     MetricQueryConstraints,
     MetricQueryPlan,
     MetricQueryUnit,
     query_metrics_for_codes,
     query_metrics_for_question,
 )
-from app.services.temporal_interpreter import TemporalResolution
+from app.services.conversations.temporal_interpreter import TemporalResolution
 
 # SessionLocal 复用 asyncpg 连接池；本模块的数据库集成测试必须共用同一事件循环。
 pytestmark = pytest.mark.asyncio(loop_scope="module")
@@ -48,7 +48,7 @@ def _controlled_llm_temporal_resolution(monkeypatch: pytest.MonkeyPatch) -> None
             )
         return TemporalResolution("no_time")
 
-    monkeypatch.setattr("app.services.conversation_tasks.resolve_temporal_intent", _resolve)
+    monkeypatch.setattr("app.services.conversations.tasks.resolve_temporal_intent", _resolve)
 
 
 async def test_task_clarification_requeries_two_weeks_against_real_business_data() -> None:

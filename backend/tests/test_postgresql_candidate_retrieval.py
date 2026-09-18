@@ -2,8 +2,8 @@
 
 import pytest
 
-from app.services import knowledge_rag
-from app.services.knowledge_search import build_knowledge_search_terms
+from app.services.knowledge import retrieval as knowledge_rag
+from app.services.knowledge.search import build_knowledge_search_terms
 
 
 def test_search_terms_include_document_metadata_and_content() -> None:

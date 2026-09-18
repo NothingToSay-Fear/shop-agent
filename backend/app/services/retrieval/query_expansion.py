@@ -7,8 +7,8 @@ import logging
 from dataclasses import dataclass
 
 from app.config import Settings
-from app.services.local_embeddings import embed_texts
-from app.services.llm_factory import LLMProviderFactory
+from app.services.models.embeddings import embed_texts
+from app.services.models.llm_factory import LLMProviderFactory
 
 logger = logging.getLogger(__name__)
 

@@ -14,15 +14,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings, get_settings
 from app.models import KnowledgeChunk, KnowledgeDocument, UserKnowledgeDocumentSetting
-from app.services.document_parser import apply_semantic_boundaries, parse_document
-from app.services.hybrid_retrieval import FusedCandidate, reciprocal_rank_fusion, tokenize_for_bm25
-from app.services.knowledge_search import (
+from app.services.knowledge.document_parser import apply_semantic_boundaries, parse_document
+from app.services.retrieval.hybrid import FusedCandidate, reciprocal_rank_fusion, tokenize_for_bm25
+from app.services.knowledge.search import (
     build_knowledge_retrieval_text,
     build_knowledge_search_terms,
 )
-from app.services.local_embeddings import embed_texts
-from app.services.local_reranker import rerank_texts
-from app.services.query_expansion import (
+from app.services.models.embeddings import embed_texts
+from app.services.models.reranker import rerank_texts
+from app.services.retrieval.query_expansion import (
     PreparedRetrievalQueries,
     embed_expanded_queries,
     expand_queries,

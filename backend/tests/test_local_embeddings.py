@@ -1,8 +1,8 @@
 import pytest
 
 from app.config import Settings
-from app.services.local_embeddings import embed_texts, preload_model
-from app.services.metric_rag import _query_embedding
+from app.services.models.embeddings import embed_texts, preload_model
+from app.services.analytics.metric_rag import _query_embedding
 
 
 @pytest.mark.asyncio

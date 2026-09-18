@@ -6,7 +6,7 @@ import pytest
 
 from app.agent.prompt_builder import PromptBuilder
 from app.agent.execution_plan import build_execution_plan
-from app.services.conversation_summary import (
+from app.services.conversations.summary import (
     ConversationMemoryTurn,
     ConversationSummaryContext,
     _estimate_state_tokens,

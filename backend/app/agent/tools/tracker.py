@@ -7,8 +7,8 @@ import json
 from dataclasses import dataclass, field
 from time import perf_counter
 
-from app.services.knowledge_rag import KnowledgeQueryContext
-from app.services.metric_rag import MetricQueryContext
+from app.services.knowledge.retrieval import KnowledgeQueryContext
+from app.services.analytics.metric_rag import MetricQueryContext
 from app.services.intent_router import RetrievalRoute
 from app.services.web_search import WebSearchContext
 

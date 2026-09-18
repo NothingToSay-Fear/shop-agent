@@ -4,7 +4,7 @@ from sqlalchemy import select
 from app.agent.task_orchestrator import MainAgentOrchestrator
 from app.database import SessionLocal
 from app.models import Conversation, ConversationTask, TaskPlanStepAttempt, User
-from app.services.task_plans import (
+from app.services.conversations.task_plans import (
     append_replanned_actions,
     complete_action,
     ensure_task_plan,

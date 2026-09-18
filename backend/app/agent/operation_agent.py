@@ -10,12 +10,12 @@ from app.agent.task_orchestrator import DelegationPlan
 from app.agent.tools import AgentToolTracker
 from app.agent.workflow import AgentWorkflow
 from app.config import Settings, get_settings
-from app.services.conversation_context import ConversationContextSnapshot
-from app.services.conversation_history import ConversationHistoryContext
-from app.services.conversation_summary import ConversationSummaryContext
+from app.services.conversations.context import ConversationContextSnapshot
+from app.services.conversations.history import ConversationHistoryContext
+from app.services.conversations.summary import ConversationSummaryContext
 from app.services.intent_router import RetrievalMode, RetrievalRoute
-from app.services.user_memory import UserMemoryContext
-from app.services.task_plans import ExecutablePlanAction, PlanExecutionController
+from app.services.memory.user_memory import UserMemoryContext
+from app.services.conversations.task_plans import ExecutablePlanAction, PlanExecutionController
 
 
 @dataclass(frozen=True)

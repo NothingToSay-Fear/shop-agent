@@ -7,9 +7,9 @@ from dataclasses import dataclass
 from typing import Literal
 
 from app.config import Settings, get_settings
-from app.services.local_embeddings import embed_texts
-from app.services.local_reranker import rerank_texts
-from app.services.metric_rag import cosine_similarity
+from app.services.models.embeddings import embed_texts
+from app.services.models.reranker import rerank_texts
+from app.services.analytics.metric_rag import cosine_similarity
 
 RetrievalMode = Literal["metrics", "knowledge", "hybrid", "web"]
 RouteMode = Literal["metrics", "knowledge", "hybrid", "web", "web_hybrid"]

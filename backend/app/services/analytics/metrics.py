@@ -8,7 +8,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import DailyMetric
-from app.services.business_dates import current_business_date
+from app.services.analytics.business_dates import current_business_date
 
 
 @dataclass(frozen=True)

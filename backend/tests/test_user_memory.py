@@ -4,7 +4,7 @@ from app.agent.execution_plan import build_execution_plan
 from app.agent.prompt_builder import PromptBuilder
 from app.models import UserMemory
 from app.services.intent_router import RetrievalRoute
-from app.services.user_memory import (
+from app.services.memory.user_memory import (
     MemoryItem,
     UserMemoryContext,
     _default_expiry,

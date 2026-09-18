@@ -2,7 +2,7 @@
 
 import asyncio
 
-from app.services.knowledge_indexer import run_worker
+from app.services.knowledge.indexer import run_worker
 
 
 if __name__ == "__main__":

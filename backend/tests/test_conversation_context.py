@@ -1,11 +1,11 @@
 from datetime import date
 
-from app.services.conversation_context import (
+from app.services.conversations.context import (
     ConversationContextSnapshot,
     build_context_snapshot,
     build_retrieval_question,
 )
-from app.services.date_ranges import parse_explicit_date_range
+from app.services.analytics.date_ranges import parse_explicit_date_range
 
 
 def test_context_inherits_activity_period_and_overrides_metric() -> None:

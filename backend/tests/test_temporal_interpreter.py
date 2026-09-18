@@ -1,6 +1,6 @@
 from datetime import date
 
-from app.services.temporal_interpreter import (
+from app.services.conversations.temporal_interpreter import (
     TemporalResolution,
     _needs_llm_from_scores,
     _validate_llm_resolution,

@@ -14,7 +14,7 @@ from app.services.agent_audit import (
     update_run_route,
 )
 from app.services.intent_router import RetrievalRoute
-from app.services.task_plans import _safe_error_code
+from app.services.conversations.task_plans import _safe_error_code
 
 
 def test_question_summary_does_not_copy_original_question() -> None:

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import date
 
-from app.services.date_ranges import DEMO_DATA_YEAR
+from app.services.analytics.date_ranges import DEMO_DATA_YEAR
 
 # 只有用户明确提到这些活动名称时，才可将其映射为受控查询日期。
 ACTIVITY_PERIODS = {

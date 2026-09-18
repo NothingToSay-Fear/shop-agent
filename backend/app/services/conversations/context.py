@@ -11,9 +11,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import ConversationContext, MetricDefinition
-from app.services.activity_periods import ACTIVITY_PERIODS
-from app.services.date_ranges import parse_explicit_date_range
-from app.services.metric_rag import METRIC_DEFINITION_SEEDS
+from app.services.analytics.activity_periods import ACTIVITY_PERIODS
+from app.services.analytics.date_ranges import parse_explicit_date_range
+from app.services.analytics.metric_rag import METRIC_DEFINITION_SEEDS
 
 MetricHint = tuple[str, tuple[str, ...]]
 DEFAULT_METRIC_HINTS: tuple[MetricHint, ...] = tuple(

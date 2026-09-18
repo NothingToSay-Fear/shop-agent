@@ -1,7 +1,7 @@
 from datetime import date
 from decimal import Decimal
 
-from app.seed import ACTIVITY_METRIC_SEEDS, DEMO_METRIC_SEEDS, DEMO_PRODUCTS, YEARLY_BASE_METRIC_SEEDS
+from app.scripts.seed_demo_data import ACTIVITY_METRIC_SEEDS, DEMO_METRIC_SEEDS, DEMO_PRODUCTS, YEARLY_BASE_METRIC_SEEDS
 
 
 def test_spring_review_fixture_matches_documented_result() -> None:

@@ -4,9 +4,9 @@ import app.agent.workflow as workflow_module
 from app.agent.tools.tracker import AgentToolTracker
 from app.agent.workflow import AgentWorkflow
 from app.config import Settings
-from app.services.conversation_context import ConversationContextSnapshot
+from app.services.conversations.context import ConversationContextSnapshot
 from app.services.intent_router import RetrievalRoute
-from app.services.query_expansion import PreparedRetrievalQueries
+from app.services.retrieval.query_expansion import PreparedRetrievalQueries
 
 
 @pytest.mark.asyncio

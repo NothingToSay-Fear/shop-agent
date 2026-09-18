@@ -7,7 +7,7 @@ from app.agent.tools.metric_rag import build_metric_rag_tool
 from app.agent.tools.tracker import AgentToolTracker
 from app.agent.tools.web_search import build_web_search_tool
 from app.config import Settings
-from app.services.query_expansion import PreparedRetrievalQueries
+from app.services.retrieval.query_expansion import PreparedRetrievalQueries
 
 
 def build_agent_tools(

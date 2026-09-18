@@ -6,8 +6,8 @@ from app.agent.tools.tracker import AgentToolTracker
 from app.agent.tools.registry import get_tool_specification
 from app.config import Settings
 from app.database import SessionLocal
-from app.services.knowledge_rag import query_knowledge_for_question
-from app.services.query_expansion import PreparedRetrievalQueries
+from app.services.knowledge.retrieval import query_knowledge_for_question
+from app.services.retrieval.query_expansion import PreparedRetrievalQueries
 
 
 def build_knowledge_rag_tool(

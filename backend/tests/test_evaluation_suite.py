@@ -9,8 +9,8 @@ from app.agent.tools.tracker import AgentToolTracker
 from app.agent.workflow import AgentWorkflow
 from app.config import Settings
 from app.services.intent_router import RetrievalRoute
-from app.services.knowledge_rag import KnowledgeQueryContext
-from app.services.metric_rag import MetricQueryContext
+from app.services.knowledge.retrieval import KnowledgeQueryContext
+from app.services.analytics.metric_rag import MetricQueryContext
 from app.services.web_search import WebSearchContext, WebSearchItem
 from tests.evaluation_cases import EVALUATION_CASES, EvaluationCase, EvaluationToolResult
 

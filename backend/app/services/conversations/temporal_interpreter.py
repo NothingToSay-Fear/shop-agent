@@ -13,12 +13,12 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings, get_settings
-from app.services.llm_factory import LLMProviderFactory
+from app.services.models.llm_factory import LLMProviderFactory
 from app.models import DailyMetric
-from app.services.business_dates import current_business_date
-from app.services.activity_periods import resolve_activity_periods
-from app.services.date_ranges import parse_explicit_date_ranges
-from app.services.local_embeddings import embed_texts
+from app.services.analytics.business_dates import current_business_date
+from app.services.analytics.activity_periods import resolve_activity_periods
+from app.services.analytics.date_ranges import parse_explicit_date_ranges
+from app.services.models.embeddings import embed_texts
 
 TemporalStatus = Literal["no_time", "resolved", "clarify", "forecast"]
 TemporalSource = Literal["llm", "local_gate", "unavailable", "invalid"]

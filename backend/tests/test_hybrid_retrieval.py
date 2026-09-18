@@ -3,11 +3,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.services.hybrid_retrieval import hybrid_retrieve, reciprocal_rank_fusion, tokenize_for_bm25
-from app.services import knowledge_rag
+from app.services.retrieval.hybrid import hybrid_retrieve, reciprocal_rank_fusion, tokenize_for_bm25
+from app.services.knowledge import retrieval as knowledge_rag
 from app.config import Settings
-from app.services.hybrid_retrieval import FusedCandidate
-from app.services.query_expansion import _normalize_expanded_queries
+from app.services.retrieval.hybrid import FusedCandidate
+from app.services.retrieval.query_expansion import _normalize_expanded_queries
 
 
 @dataclass(frozen=True)

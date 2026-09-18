@@ -19,7 +19,7 @@ from app.schemas.knowledge import (
     KnowledgeDocumentRetrievalUpdate,
 )
 from app.services.authentication import get_current_user
-from app.services.document_parser import SUPPORTED_FILE_TYPES
+from app.services.knowledge.document_parser import SUPPORTED_FILE_TYPES
 
 router = APIRouter(prefix="/api/knowledge", tags=["knowledge"])
 logger = logging.getLogger(__name__)

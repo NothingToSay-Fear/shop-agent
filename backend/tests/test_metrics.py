@@ -1,6 +1,6 @@
 from datetime import date
 
-from app.services.metrics import MetricPeriod, MetricsOverview
+from app.services.analytics.metrics import MetricPeriod, MetricsOverview
 
 
 def test_metrics_overview_calculates_change_and_formats_agent_context() -> None:

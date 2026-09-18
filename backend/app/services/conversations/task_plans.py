@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.agent.task_orchestrator import DelegationPlan, MainAgentOrchestrator, PlannedAction
 from app.agent.tools.tracker import ToolCallAudit
 from app.models import ConversationTask, TaskPlan, TaskPlanStep, TaskPlanStepAttempt
-from app.services.conversation_tasks import TASK_WAITING_CLARIFICATION
+from app.services.conversations.tasks import TASK_WAITING_CLARIFICATION
 
 
 logger = logging.getLogger("uvicorn.error")

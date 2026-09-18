@@ -7,7 +7,7 @@ from collections.abc import AsyncIterator
 
 from app.agent.prompt_builder import BASE_SYSTEM_PROMPT
 from app.config import Settings
-from app.services.llm_factory import LLMProviderFactory
+from app.services.models.llm_factory import LLMProviderFactory
 
 logger = logging.getLogger(__name__)
 

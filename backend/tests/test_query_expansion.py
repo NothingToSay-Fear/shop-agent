@@ -1,6 +1,6 @@
 import pytest
 
-import app.services.query_expansion as query_expansion
+import app.services.retrieval.query_expansion as query_expansion
 from app.config import Settings
 
 

@@ -9,8 +9,8 @@ from sqlalchemy import select
 from app.config import get_settings
 from app.database import SessionLocal
 from app.models import MetricDefinition
-from app.services.local_embeddings import embed_texts
-from app.services.knowledge_rag import reindex_knowledge_chunks
+from app.services.models.embeddings import embed_texts
+from app.services.knowledge.retrieval import reindex_knowledge_chunks
 
 
 def _retrieval_text(definition: MetricDefinition) -> str:

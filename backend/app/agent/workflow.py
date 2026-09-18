@@ -17,16 +17,16 @@ from app.agent.execution_plan import ExecutionPlan, build_execution_plan, valida
 from app.agent.prompt_builder import PromptBuilder
 from app.agent.tools import AgentToolTracker, build_agent_tools
 from app.config import Settings
-from app.services.conversation_context import (
+from app.services.conversations.context import (
     ConversationContextSnapshot,
     build_retrieval_question,
 )
-from app.services.conversation_summary import ConversationSummaryContext
-from app.services.conversation_history import ConversationHistoryContext
+from app.services.conversations.summary import ConversationSummaryContext
+from app.services.conversations.history import ConversationHistoryContext
 from app.services.intent_router import RetrievalMode, RetrievalRoute, route_question
-from app.services.query_expansion import prepare_retrieval_queries
-from app.services.user_memory import UserMemoryContext
-from app.services.task_plans import ExecutablePlanAction, PlanExecutionController
+from app.services.retrieval.query_expansion import prepare_retrieval_queries
+from app.services.memory.user_memory import UserMemoryContext
+from app.services.conversations.task_plans import ExecutablePlanAction, PlanExecutionController
 
 StatusCallback = Callable[[str, str], Awaitable[None]]
 ChunkCallback = Callable[[str], Awaitable[None]]

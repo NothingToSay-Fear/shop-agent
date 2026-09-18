@@ -1,6 +1,6 @@
 from app.agent.task_orchestrator import MainAgentOrchestrator
 from app.models import ConversationTask
-from app.services.conversation_tasks import TASK_HYBRID_ANALYSIS, TASK_METRIC_COMPARISON
+from app.services.conversations.tasks import TASK_HYBRID_ANALYSIS, TASK_METRIC_COMPARISON
 
 
 def test_causal_analysis_delegates_evidence_to_the_review_agent() -> None:

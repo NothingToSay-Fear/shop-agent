@@ -7,11 +7,11 @@ import app.agent.workflow as workflow_module
 from app.agent.execution_plan import build_execution_plan, validate_execution_plan
 from app.agent.tools.tracker import AgentToolTracker, ToolCallAudit
 from app.config import Settings
-from app.services.conversation_context import ConversationContextSnapshot
+from app.services.conversations.context import ConversationContextSnapshot
 from app.agent.data_query_agent import DataQueryAgent
 from app.agent.data_query_agent import DataQueryObservation
 from app.agent.task_orchestrator import DelegationPlan
-from app.services.task_plans import ExecutablePlanAction
+from app.services.conversations.task_plans import ExecutablePlanAction
 from app.services.intent_router import RetrievalRoute
 
 

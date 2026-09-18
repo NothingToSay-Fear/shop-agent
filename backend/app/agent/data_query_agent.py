@@ -7,11 +7,11 @@ from typing import TYPE_CHECKING, Mapping
 
 from langchain_core.tools import BaseTool
 
-from app.services.data_query_planner import DataQueryPlan, build_data_query_plan
+from app.services.analytics.data_query_planner import DataQueryPlan, build_data_query_plan
 
 if TYPE_CHECKING:
     from app.agent.tools.tracker import AgentToolTracker
-    from app.services.conversation_context import ConversationContextSnapshot
+    from app.services.conversations.context import ConversationContextSnapshot
 
 
 DATA_QUERY_AGENT_NAME = "data_query_agent"

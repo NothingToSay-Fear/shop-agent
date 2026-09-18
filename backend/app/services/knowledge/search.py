@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from app.services.hybrid_retrieval import tokenize_for_bm25
+from app.services.retrieval.hybrid import tokenize_for_bm25
 
 
 CONTENT_TYPE_LABELS = {

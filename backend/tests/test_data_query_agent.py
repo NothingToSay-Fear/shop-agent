@@ -2,9 +2,9 @@ import pytest
 
 from app.agent.data_query_agent import DATA_QUERY_AGENT_NAME, DataQueryAgent
 from app.agent.tools import AgentToolTracker
-from app.services.conversation_context import ConversationContextSnapshot
-from app.services.data_query_planner import build_data_query_plan
-from app.services.metric_rag import MetricQueryContext
+from app.services.conversations.context import ConversationContextSnapshot
+from app.services.analytics.data_query_planner import build_data_query_plan
+from app.services.analytics.metric_rag import MetricQueryContext
 
 
 def test_explicit_task_metrics_are_a_complete_execution_contract() -> None:

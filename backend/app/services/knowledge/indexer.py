@@ -12,9 +12,9 @@ from sqlalchemy import delete, select, update
 from app.config import Settings, get_settings
 from app.database import SessionLocal
 from app.models import KnowledgeChunk, KnowledgeDocument, KnowledgeIndexJob
-from app.services.document_parser import apply_semantic_boundaries, parse_document
-from app.services.local_embeddings import embed_texts
-from app.services.knowledge_search import (
+from app.services.knowledge.document_parser import apply_semantic_boundaries, parse_document
+from app.services.models.embeddings import embed_texts
+from app.services.knowledge.search import (
     build_knowledge_retrieval_text,
     build_knowledge_search_terms,
 )
