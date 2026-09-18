@@ -8,7 +8,6 @@ alembic>=1.14,<2.0
 httpx>=0.28,<1.0
 langchain>=0.3,<2.0
 langgraph>=0.2,<2.0
-deepagents>=0.1,<1.0
 langchain-openai>=0.2,<2.0
 langchain-anthropic>=0.3,<2.0
 langchain-google-genai>=2.0,<4.0

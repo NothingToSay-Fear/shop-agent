@@ -167,7 +167,7 @@ class AgentWorkflow:
                 active_history_context.display,
                 delegation_plan.output_contract if delegation_plan else "",
             )
-            answer = await self._generate_answer(user_input, generation_context, tools, on_chunk)
+            answer = await self._generate_answer(user_input, generation_context, on_chunk)
             if answer is not None:
                 await self._finish_action(
                     plan_controller, synth_action, synth_attempt, "success", "已形成最终受控结论", tracker.reference_ids
@@ -198,15 +198,14 @@ class AgentWorkflow:
         self,
         user_input: str,
         generation_context: str,
-        tools: list[BaseTool],
         on_chunk: ChunkCallback | None,
     ) -> str | None:
         """通常请求逐片转发模型生成。没有 SSE 消费者时保留完整回答接口，供同步调用和旧测试使用。"""
         if on_chunk is None:
-            return await self.answer_generator.generate_with_llm(user_input, generation_context, tools)
+            return await self.answer_generator.generate_with_llm(user_input, generation_context)
 
         parts: list[str] = []
-        async for chunk in self.answer_generator.stream_with_llm(user_input, generation_context, tools):
+        async for chunk in self.answer_generator.stream_with_llm(user_input, generation_context):
             parts.append(chunk)
             await self._emit_chunk(on_chunk, chunk)
         return "".join(parts) or None

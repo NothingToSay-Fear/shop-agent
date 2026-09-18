@@ -2,7 +2,7 @@
 
 ## 1. 架构概览
 
-项目采用前后端分离架构。React 前端负责运营工作台；FastAPI 提供 API、SSE 流式响应和数据持久化接口；Agent 层使用 DeepAgent、LangChain 与 LangGraph 编排工具调用；PostgreSQL 保存业务状态。
+项目采用前后端分离架构。React 前端负责运营工作台；FastAPI 提供 API、SSE 流式响应和数据持久化接口；Agent 层使用自建持久化 Plan-and-Execute、LangChain 与 LangGraph 编排受控能力；PostgreSQL 保存业务状态。
 
 ```text
 浏览器（React + TypeScript）
@@ -14,7 +14,7 @@ FastAPI API 服务
  └── OperationAgent（主 Agent）
        ├── 指标 RAG 工具 / 知识库 RAG 工具 / 联网搜索工具
        ├── 运营复盘子 Agent（复杂复盘与归因）
-       ├── DeepAgent + LangChain + LangGraph（配置模型后）
+       ├── LangChain 聊天模型 + LangGraph（配置模型后）
        └── 受控证据回退（未配置模型或调用失败时）
         │
         ├── PostgreSQL
@@ -135,7 +135,7 @@ SQL 模板存储在表中以便维护指标口径，但执行前必须与后端�
 | 前端 | React、TypeScript、Vite | 构建运营工作台与类型安全的前端代码 |
 | 前端 UI | Ant Design | 表单、知识库管理、会话界面与基础数据展示 |
 | 后端 | Python 3.12、FastAPI、Uvicorn | REST API、SSE 流式回答与健康检查 |
-| Agent | DeepAgent、LangChain、LangGraph | Agent 执行、多步骤编排、模型与工具抽象 |
+| Agent | 自建 Plan-and-Execute、LangChain、LangGraph | 持久化任务执行、模型与工具抽象 |
 | 联网检索 | Tavily Search API、HTTPX | 受控获取公开且有时效性的信息；不引入额外 SDK |
 | 知识库候选召回 | PostgreSQL、pgvector、HNSW、GIN 全文索引、jieba | 在数据库按可见资料范围快速返回语义和词面候选，避免 API 读取并遍历全部切片向量 |
 | 混合融合 | RRF | 按排名融合数据库返回的向量与词面候选，并按片段 ID 去重 |
@@ -164,13 +164,13 @@ SQL 模板存储在表中以便维护指标口径，但执行前必须与后端�
 ### Agent 服务
 
 - `OperationAgent` 只负责调用正式工作流并实时转发模型生成中的 SSE 文本片段；不提供外部注入检索上下文的旁路，因此不直接处理路由、工具调用、模型创建或回答文案。
-- `AgentWorkflow` 负责按持久化 Action Plan 执行、校验工具轨迹和来源，并在证据不足时接受主 Agent 的受控重规划；`AnswerGenerator` 负责 DeepAgent/LLM 回答与受控证据回退；`PromptBuilder` 只生成系统提示词与已执行计划约束。
+- `AgentWorkflow` 负责按持久化 Action Plan 执行、校验工具轨迹和来源，并在证据不足时接受主 Agent 的受控重规划；`AnswerGenerator` 使用无工具的 LangChain 聊天模型完成最终表达与受控证据回退；`PromptBuilder` 只生成系统提示词与已执行计划约束。
 
 ```text
 OperationAgent（流式输出）
   -> AgentWorkflow（路由、执行计划、工具调用、来源校验）
        -> PromptBuilder（系统提示词、已执行计划约束）
-       -> AnswerGenerator（DeepAgent / 受控证据回退）
+       -> AnswerGenerator（LangChain 聊天模型 / 受控证据回退）
        -> app/agent/execution_plan.py（计划与校验）
        -> app/agent/tools/（指标、知识库、联网搜索、工具注册表）
 ```
@@ -179,9 +179,8 @@ OperationAgent（流式输出）
 - `validate_execution_plan` 要求每个必调工具都有 `success`、`empty`、`skipped` 或 `failed` 终态；`success` 时还必须有与工具匹配的引用 ID（`metric:*`、`knowledge_chunk:*`、HTTP(S) URL）。校验失败时不会调用模型生成事实性结论。
 - 工具注册表位于 `app/agent/tools/registry.py`，声明稳定工具名、每轮最多真实调用次数和引用规则。知识库与联网检索每轮最多一次；指标查询可在主 Agent 已追加的受控 Action 内执行有限次。超出登记额度的调用会返回 `tool_call_limit_reached`，不产生额外数据库查询或联网请求。
 - 前两类工具自行创建短生命周期数据库会话，不向模型暴露连接或任意 SQL；联网工具只调用固定的 Tavily 搜索端点。工具代码按职责位于 `app/agent/tools/`：`metric_rag.py`、`knowledge_rag.py`、`web_search.py` 负责具体检索，`tracker.py` 汇总本轮依据与调用额度，`__init__.py` 仅组合工具供 Agent 使用。
-- 涉及活动复盘、经营归因、效果评估和优化建议时，主 Agent 通过 DeepAgent `task` 委派给 `operation_review_agent`；子 Agent 只拥有同一批受控 RAG 与联网搜索工具。项目同时显式覆盖 DeepAgent 默认的 `general-purpose` 子 Agent，防止框架自动附加更宽的能力。
-- 主 Agent 和两个子 Agent 均把框架文件系统能力限制为只读 `read_file`；不提供文件写入、删除或命令执行工具。
-- 配置 `LLM_API_KEY` 和 `LLM_MODEL` 后使用 DeepAgent 执行 LangChain/LangGraph Agent 流程，但模型只能在系统已完成并校验执行计划后基于受控上下文总结；模型未配置或调用失败时，主 Agent 不再生成模拟回答，仅返回同轮已验证的工具依据。
+- 涉及活动复盘、经营归因、效果评估和优化建议时，主工作流在指标与资料证据校验通过后，显式调用无工具的 `ReviewAgent`；它只能消费已验证证据包，不能重复查询、读写文件或补充外部事实。
+- 配置 `LLM_API_KEY` 和 `LLM_MODEL` 后，最终生成层和复盘子 Agent 均使用 LangChain 聊天模型；模型只能在系统已完成并校验执行计划后基于受控上下文总结。模型未配置或调用失败时，主 Agent 不再生成模拟回答，仅返回同轮已验证的工具依据。
 - `ContextBuilder` 在保存用户消息后合并会话中已确认的活动、日期、指标提示和分析目标。当前轮明确条件覆盖旧值；支持清除或重置；未出现的条件可继承。它统一识别中文、ISO 和 `8/16–8/22` 等月/日日期范围；时间继承是否清除不再由关键词决定，而是消费 `temporal_interpreter` 的受限判定，只给路由和检索提供“原问题 + 条件摘要”。
 - `ConversationTask` 是独立于短期记忆的会话任务状态。它保存任务类型、状态、原任务问题的长度受限副本、后续补充、缺失槽位和来源消息 ID；当前覆盖指标查询/对比、知识库问答、综合分析和复盘。存在既有任务时，`task_interpreter` 先将“既有任务快照 + 当前问题”交给已配置 LLM，并只接受 `continue`、`revise`、`replace`、`cancel`、受限变更槽位和置信度组成的 JSON；低置信度、格式异常或模型不可用时退回确定性规则。`temporal_interpreter` 先由本地语义门控判断是否需要 LLM；需要时才接收受限 JSON，并可直接给出规整后的 ISO 查询区间，后端校验后写入任务帧。待补充任务的原问题会作为最小上下文传入时间解析器，使“本周是指 2026-09-09 至 2026-09-15”这类补充能够由模型完整列出比较所需的全部区间，后端不再派生上周或月度范围。新时间结果会关闭旧任务或旧会话时间范围，避免新问题继续使用上一轮日期。资料和综合任务的续问复用原任务目标与已完成路由，但总会重新执行本轮 RAG，绝不把上一轮检索结果拼成当前事实。新任务、取消或“重置会话条件”会关闭未完成任务。
 - 会话中的 `start_date`、`end_date` 不再由指标 RAG 从摘要文本二次解析：工作流将其作为 `date` 类型参数传给 `query_metric_rag`，再由 `MetricQueryConstraints` 绑定到受控 SQL 模板。单一继承范围作为默认单元；本轮明确出现多个活动或多个日期范围时，`MetricQueryPlan` 以本轮多单元范围为准。条件摘要仅用于语义路由与可解释展示。

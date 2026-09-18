@@ -1,30 +1,5 @@
-from app.agent.review_agent import (
-    GENERAL_PURPOSE_AGENT_NAME,
-    REVIEW_AGENT_NAME,
-    build_general_subagent,
-    build_review_subagent,
-)
 from app.agent.tools import AgentToolTracker, build_agent_tools
 from app.config import Settings
-
-
-def test_review_subagent_consumes_evidence_without_tools() -> None:
-    """复盘子 Agent 只消费主工作流已验证的证据，不重复查询或获得工具权限。"""
-    tools = [object(), object()]
-
-    subagent = build_review_subagent(tools)
-
-    assert subagent["name"] == REVIEW_AGENT_NAME
-    assert subagent["tools"] == []
-    assert "复盘" in str(subagent["description"])
-
-
-def test_general_subagent_overrides_framework_default_permissions() -> None:
-    """显式通用子 Agent 应覆盖 DeepAgent 自动添加的同名 Agent。"""
-    subagent = build_general_subagent([])
-
-    assert subagent["name"] == GENERAL_PURPOSE_AGENT_NAME
-    assert "不执行文件" in str(subagent["description"])
 
 
 def test_agent_tool_tracker_only_persists_actual_references() -> None:
