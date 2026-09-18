@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from typing import TypedDict
 
 from langchain_core.tools import BaseTool
+from langgraph.graph import END, START, StateGraph
 
 from app.agent.answer_generator import AnswerGenerator
-from app.agent.data_query_agent import DataQueryAgent
+from app.agent.data_query_agent import DataQueryAgent, DataQueryObservation
 from app.agent.review_agent import ReviewAgent
 from app.agent.task_orchestrator import DelegationPlan, MainAgentOrchestrator
 from app.agent.execution_plan import ExecutionPlan, build_execution_plan, validate_execution_plan
@@ -37,6 +39,24 @@ class WorkflowResult:
     answer: str
     data_references: str
     tracker: AgentToolTracker
+
+
+@dataclass(frozen=True)
+class _PersistedActionBatchResult:
+    """一次图节点执行后的计划状态；数据库仍是步骤状态的唯一事实来源。"""
+
+    deferred_actions: dict[str, ExecutablePlanAction]
+    completed_keys: set[str]
+    observation: DataQueryObservation | None
+
+
+class _ActionGraphState(TypedDict, total=False):
+    """单次运行内的轻量图状态，不保存原始工具输出或数据库事实。"""
+
+    actions: list[ExecutablePlanAction]
+    completed_keys: set[str]
+    deferred_actions: dict[str, ExecutablePlanAction]
+    observation: DataQueryObservation | None
 
 
 class AgentWorkflow:
@@ -114,7 +134,7 @@ class AgentWorkflow:
                 data_query_agent,
             )
         else:
-            pending_final_actions = await self._run_persisted_actions(
+            pending_final_actions = await self._run_persisted_action_graph(
                 tools,
                 retrieval_question,
                 tracker,
@@ -385,6 +405,229 @@ class AgentWorkflow:
             completed_keys.add(action.key)
 
         return deferred
+
+    async def _run_persisted_action_graph(
+        self,
+        tools: list[BaseTool],
+        user_input: str,
+        tracker: AgentToolTracker,
+        on_status: StatusCallback | None,
+        conversation_context: ConversationContextSnapshot,
+        data_query_agent: DataQueryAgent | None,
+        delegation_plan: DelegationPlan | None,
+        actions: list[ExecutablePlanAction],
+        controller: PlanExecutionController | None,
+    ) -> dict[str, ExecutablePlanAction]:
+        """以 LangGraph 驱动“执行批次—评估证据—重规划”的运行时循环。
+
+        图状态只保存待执行步骤和受控观察结果；步骤状态、预算和审计仍由
+        ``PlanExecutionController`` 持久化到 PostgreSQL。
+        """
+
+        async def execute_actions(state: _ActionGraphState) -> _ActionGraphState:
+            batch = await self._run_persisted_action_batch(
+                tools,
+                user_input,
+                tracker,
+                on_status,
+                conversation_context,
+                data_query_agent,
+                state.get("actions", []),
+                controller,
+                state.get("completed_keys", set()),
+            )
+            return {
+                "completed_keys": batch.completed_keys,
+                "deferred_actions": {
+                    **state.get("deferred_actions", {}),
+                    **batch.deferred_actions,
+                },
+                "observation": batch.observation,
+            }
+
+        def next_after_execution(state: _ActionGraphState) -> str:
+            observation = state.get("observation")
+            if (
+                observation is not None
+                and observation.next_metric_codes
+                and delegation_plan is not None
+                and controller is not None
+            ):
+                return "replan"
+            return "end"
+
+        async def replan(state: _ActionGraphState) -> _ActionGraphState:
+            observation = state.get("observation")
+            if observation is None or delegation_plan is None or controller is None:
+                return {"actions": [], "observation": None}
+            proposed = MainAgentOrchestrator().replan(
+                delegation_plan,
+                next_metric_codes=observation.next_metric_codes,
+                reason=observation.reason,
+            )
+            if not proposed:
+                return {"actions": [], "observation": None}
+            await self._emit_status(on_status, "replan", "主 Agent 已根据证据追加下一批数据验证动作…")
+            pending = await controller.append_replan(proposed, observation.reason)
+            completed_keys = state.get("completed_keys", set())
+            deferred_actions = {
+                **state.get("deferred_actions", {}),
+                **{
+                    "review" if action.action_type == "review" else "synthesize": action
+                    for action in pending
+                    if action.action_type in {"review", "synthesize"}
+                },
+            }
+            return {
+                "actions": [
+                    action
+                    for action in pending
+                    if action.key not in completed_keys
+                    and action.action_type not in {"review", "synthesize"}
+                ],
+                "deferred_actions": deferred_actions,
+                "observation": None,
+            }
+
+        def next_after_replan(state: _ActionGraphState) -> str:
+            return "execute_actions" if state.get("actions") else "end"
+
+        graph = StateGraph(_ActionGraphState)
+        graph.add_node("execute_actions", execute_actions)
+        graph.add_node("replan", replan)
+        graph.add_edge(START, "execute_actions")
+        graph.add_conditional_edges(
+            "execute_actions",
+            next_after_execution,
+            {"replan": "replan", "end": END},
+        )
+        graph.add_conditional_edges(
+            "replan",
+            next_after_replan,
+            {"execute_actions": "execute_actions", "end": END},
+        )
+        result = await graph.compile(name="persisted_action_execution").ainvoke(
+            {
+                "actions": actions,
+                "completed_keys": set(),
+                "deferred_actions": {},
+                "observation": None,
+            }
+        )
+        return dict(result.get("deferred_actions", {}))
+
+    async def _run_persisted_action_batch(
+        self,
+        tools: list[BaseTool],
+        user_input: str,
+        tracker: AgentToolTracker,
+        on_status: StatusCallback | None,
+        conversation_context: ConversationContextSnapshot,
+        data_query_agent: DataQueryAgent | None,
+        actions: list[ExecutablePlanAction],
+        controller: PlanExecutionController | None,
+        completed_keys: set[str],
+    ) -> _PersistedActionBatchResult:
+        """执行图中的一批持久化 Action，不在该节点内自行重规划。"""
+        tool_by_name = {item.name: item for item in tools}
+        completed = set(completed_keys)
+        deferred: dict[str, ExecutablePlanAction] = {}
+        observation: DataQueryObservation | None = None
+
+        for action in actions:
+            if action.action_type in {"review", "synthesize"}:
+                deferred["review" if action.action_type == "review" else "synthesize"] = action
+                continue
+            if any(dependency not in completed for dependency in action.depends_on):
+                attempt = await self._begin_action(controller, action)
+                await self._finish_action(
+                    controller, action, attempt, "skipped", "前置动作未完成，跳过本动作"
+                )
+                completed.add(action.key)
+                continue
+
+            attempt = await self._begin_action(controller, action)
+            if action.action_type == "confirm_constraints":
+                await self._finish_action(
+                    controller,
+                    action,
+                    attempt,
+                    "completed",
+                    "已使用任务有效约束和能力目录生成执行范围",
+                )
+                completed.add(action.key)
+                continue
+
+            if action.action_type in {"query_metrics", "query_knowledge"}:
+                tool_name = action.tool_name or ""
+                tool = tool_by_name.get(tool_name)
+                max_tool_calls = int((controller.plan.budget or {}).get("max_tool_calls", 0)) if controller else 0
+                if max_tool_calls and len(tracker.tool_calls) >= max_tool_calls:
+                    await self._finish_action(
+                        controller, action, attempt, "skipped", "已达到本计划的工具调用预算", (), "tool_budget_exhausted"
+                    )
+                    completed.add(action.key)
+                    continue
+                if tool is None:
+                    await self._finish_action(
+                        controller, action, attempt, "failed", "计划工具未注册", (), "tool_not_registered"
+                    )
+                    completed.add(action.key)
+                    continue
+                await self._emit_status(on_status, "tool", self._tool_start_message(tool_name))
+                call_offset = len(tracker.tool_calls)
+                try:
+                    if action.action_type == "query_metrics" and data_query_agent is not None:
+                        await self._emit_status(on_status, "data_query_plan", "数据库子 Agent 正在确认指标、时间范围与数据能力…")
+                        raw_codes = action.action_input.get("metric_codes")
+                        metric_codes = tuple(item for item in raw_codes if isinstance(item, str)) if isinstance(raw_codes, list) else None
+                        await data_query_agent.execute(tool, user_input, conversation_context, metric_codes=metric_codes)
+                    else:
+                        await tool.ainvoke({"question": user_input})
+                except Exception:
+                    pass
+                latest = next(
+                    (item for item in reversed(tracker.tool_calls[call_offset:]) if item.tool_name == tool_name),
+                    None,
+                )
+                if latest is None:
+                    await self._finish_action(
+                        controller, action, attempt, "failed", "工具未返回可审计结果", (), "missing_tool_audit"
+                    )
+                else:
+                    await self._finish_action(
+                        controller,
+                        action,
+                        attempt,
+                        latest.status,
+                        latest.result_summary,
+                        latest.reference_ids,
+                        latest.error_code,
+                    )
+                await self._emit_status(on_status, "tool", self._tool_finish_message(tool_name, tracker))
+                completed.add(action.key)
+                continue
+
+            if action.action_type == "evaluate_evidence":
+                observation = data_query_agent.observe(tracker) if data_query_agent is not None else None
+                if observation is None:
+                    summary = "未配置数据库子 Agent，无法提出下一步数据动作"
+                elif observation.blocked_by_capability:
+                    summary = observation.reason + "；" + "；".join(observation.blocked_by_capability)
+                else:
+                    summary = observation.reason
+                await self._finish_action(
+                    controller, action, attempt, "completed", summary, tracker.reference_ids
+                )
+                completed.add(action.key)
+                continue
+
+            await self._finish_action(
+                controller, action, attempt, "failed", "不支持的计划动作", (), "unsupported_plan_action"
+            )
+            completed.add(action.key)
+
+        return _PersistedActionBatchResult(deferred, completed, observation)
 
     @staticmethod
     async def _begin_action(

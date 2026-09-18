@@ -164,7 +164,7 @@ SQL 模板存储在表中以便维护指标口径，但执行前必须与后端�
 ### Agent 服务
 
 - `OperationAgent` 只负责调用正式工作流并实时转发模型生成中的 SSE 文本片段；不提供外部注入检索上下文的旁路，因此不直接处理路由、工具调用、模型创建或回答文案。
-- `AgentWorkflow` 负责按持久化 Action Plan 执行、校验工具轨迹和来源，并在证据不足时接受主 Agent 的受控重规划；`AnswerGenerator` 使用无工具的 LangChain 聊天模型完成最终表达与受控证据回退；`PromptBuilder` 只生成系统提示词与已执行计划约束。
+- `AgentWorkflow` 负责按持久化 Action Plan 执行、校验工具轨迹和来源。其“执行一批 Action → 评估证据 → 必要时重规划并执行下一批”的循环由 LangGraph `StateGraph` 驱动；图状态仅保存本次运行的待执行 Action、已完成键和受控观察结果，PostgreSQL 仍是步骤、预算、重规划版本与审计的唯一事实来源。`AnswerGenerator` 使用无工具的 LangChain 聊天模型完成最终表达与受控证据回退；`PromptBuilder` 只生成系统提示词与已执行计划约束。
 
 ```text
 OperationAgent（流式输出）
@@ -265,7 +265,8 @@ OperationAgent（流式输出）
   -> 创建 agent_run（running，问题长度摘要、结构化上下文快照）
   -> 路由并记录 route
   -> 读取持久化 Action Plan；指标动作直接接收已确认的时间范围与指标清单
-  -> 按动作依赖执行，记录每次 Attempt；证据不足时由主 Agent 在预算内重规划
+  -> LangGraph 按动作依赖执行本批步骤，记录每次 Attempt
+  -> 证据不足时进入 `replan` 条件分支，由主 Agent 在数据库预算内追加下一批 Action 后回到执行节点
   -> 校验工具终态、每轮调用上限与成功结果引用 ID
   -> 工具调用写入内存轨迹（不保存原始问题/全文结果）
   -> 保存 Agent 回答 + tool_calls + 完成状态
