@@ -8,6 +8,7 @@ from collections.abc import AsyncIterator, Sequence
 from deepagents.middleware.filesystem import FilesystemMiddleware
 from langchain_core.tools import BaseTool
 from app.config import Settings
+from app.services.llm_factory import LLMProviderFactory
 
 logger = logging.getLogger(__name__)
 
@@ -31,12 +32,7 @@ class ReviewAgent:
         if not self.settings.llm_enabled:
             return None
         try:
-            from langchain_openai import ChatOpenAI
-
-            options = {"model": self.settings.llm_model, "api_key": self.settings.llm_api_key, "temperature": 0.2}
-            if self.settings.llm_base_url:
-                options["base_url"] = self.settings.llm_base_url
-            model = ChatOpenAI(**options)
+            model = LLMProviderFactory.create(self.settings, temperature=0.2)
             response = await model.ainvoke([
                 ("system", REVIEW_AGENT_PROMPT),
                 ("user", f"复盘任务：\n{question}\n\n已验证证据包：\n{evidence_package}"),
@@ -50,16 +46,7 @@ class ReviewAgent:
         if not self.settings.llm_enabled:
             return
         try:
-            from langchain_openai import ChatOpenAI
-
-            options = {
-                "model": self.settings.llm_model,
-                "api_key": self.settings.llm_api_key,
-                "temperature": 0.2,
-            }
-            if self.settings.llm_base_url:
-                options["base_url"] = self.settings.llm_base_url
-            model = ChatOpenAI(**options)
+            model = LLMProviderFactory.create(self.settings, temperature=0.2)
             async for chunk in model.astream([
                 ("system", REVIEW_AGENT_PROMPT),
                 ("user", f"复盘任务：\n{question}\n\n已验证证据包：\n{evidence_package}"),

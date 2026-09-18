@@ -9,6 +9,7 @@ from typing import Literal
 
 from app.config import Settings, get_settings
 from app.models import ConversationTask
+from app.services.llm_factory import LLMProviderFactory
 from app.services.date_ranges import parse_explicit_date_range
 
 TaskRelation = Literal["continue", "revise", "replace", "cancel"]
@@ -81,16 +82,7 @@ async def interpret_task_relationship(
         return fallback
     try:
         from langchain_core.messages import HumanMessage, SystemMessage
-        from langchain_openai import ChatOpenAI
-
-        options: dict[str, object] = {
-            "model": active_settings.llm_model,
-            "api_key": active_settings.llm_api_key,
-            "temperature": 0,
-        }
-        if active_settings.llm_base_url:
-            options["base_url"] = active_settings.llm_base_url
-        response = await ChatOpenAI(**options).ainvoke(
+        response = await LLMProviderFactory.create(active_settings, temperature=0).ainvoke(
             [
                 SystemMessage(content=TASK_INTERPRETATION_PROMPT),
                 HumanMessage(content=_interpretation_input(task, question)),

@@ -8,6 +8,7 @@ from dataclasses import dataclass
 
 from app.config import Settings
 from app.services.local_embeddings import embed_texts
+from app.services.llm_factory import LLMProviderFactory
 
 logger = logging.getLogger(__name__)
 
@@ -38,16 +39,7 @@ async def expand_queries(question: str, settings: Settings) -> tuple[str, ...]:
         return (original,) if original else ()
     try:
         from langchain_core.messages import HumanMessage, SystemMessage
-        from langchain_openai import ChatOpenAI
-
-        options: dict[str, object] = {
-            "model": settings.llm_model,
-            "api_key": settings.llm_api_key,
-            "temperature": 0,
-        }
-        if settings.llm_base_url:
-            options["base_url"] = settings.llm_base_url
-        model = ChatOpenAI(**options)
+        model = LLMProviderFactory.create(settings, temperature=0)
         response = await model.ainvoke(
             [
                 SystemMessage(

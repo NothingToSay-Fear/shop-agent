@@ -13,6 +13,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings, get_settings
+from app.services.llm_factory import LLMProviderFactory
 from app.models import DailyMetric
 from app.services.business_dates import current_business_date
 from app.services.activity_periods import resolve_activity_periods
@@ -102,16 +103,7 @@ async def resolve_temporal_intent(
         )
     try:
         from langchain_core.messages import HumanMessage, SystemMessage
-        from langchain_openai import ChatOpenAI
-
-        options: dict[str, object] = {
-            "model": active_settings.llm_model,
-            "api_key": active_settings.llm_api_key,
-            "temperature": 0,
-        }
-        if active_settings.llm_base_url:
-            options["base_url"] = active_settings.llm_base_url
-        response = await ChatOpenAI(**options).ainvoke(
+        response = await LLMProviderFactory.create(active_settings, temperature=0).ainvoke(
             [
                 SystemMessage(content=_PROMPT),
                 HumanMessage(

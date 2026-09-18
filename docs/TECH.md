@@ -193,15 +193,18 @@ OperationAgent（流式输出）
 
 ### 模型服务
 
-项目不绑定任何特定模型或厂商。当前适配器使用 OpenAI 兼容协议，配置项如下：
+项目通过 `LLMProviderFactory` 将不同供应商收口为 LangChain 的统一 `BaseChatModel`，因此主 Agent、复盘 Agent、时间解析、任务关系判断、检索改写和会话摘要都复用同一模型入口；业务编排、RAG 和记忆模块不感知厂商差异。
+
+支持 `openai`（默认，包含 OpenAI-compatible 服务）、`anthropic`、`google` 与 `ollama`。各模型在工具调用、结构化输出、上下文长度和推理表现上仍有差异，生产配置应选择已验证支持流式输出和工具调用的模型。
 
 | 环境变量 | 是否必填 | 说明 |
 | --- | --- | --- |
+| `LLM_PROVIDER` | 可选 | `openai`、`anthropic`、`google` 或 `ollama`；默认 `openai` |
 | `LLM_API_KEY` | 启用真实 Agent 时必填 | 模型服务的访问密钥 |
 | `LLM_MODEL` | 启用真实 Agent 时必填 | 服务端支持的模型名称 |
-| `LLM_BASE_URL` | 可选 | 兼容模型服务的 API 地址；未设置时由 SDK 使用其默认地址 |
+| `LLM_BASE_URL` | 可选 | `openai` 兼容服务或 Ollama 的 API 地址；未设置时由 SDK 使用其默认地址 |
 
-只有同时配置 `LLM_API_KEY` 和 `LLM_MODEL` 才会调用模型生成结论；否则系统只返回本轮已验证依据，不进行关键词模板生成。
+除 Ollama 可不配置密钥外，只有同时配置 `LLM_API_KEY` 和 `LLM_MODEL` 才会调用模型生成结论；否则系统只返回本轮已验证依据，不进行关键词模板生成。
 
 ## 4. 数据模型
 

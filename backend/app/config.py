@@ -1,4 +1,5 @@
 from functools import lru_cache
+from typing import Literal
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -9,6 +10,7 @@ class Settings(BaseSettings):
 
     app_name: str = "Shop Agent API"
     database_url: str = "postgresql+asyncpg://shop_agent:change-me@db:5432/shop_agent"
+    llm_provider: Literal["openai", "anthropic", "google", "ollama"] = "openai"
     llm_api_key: str | None = None
     llm_model: str | None = None
     llm_base_url: str | None = None
@@ -50,8 +52,8 @@ class Settings(BaseSettings):
 
     @property
     def llm_enabled(self) -> bool:
-        # 仅有模型名称不足以调用服务；缺少密钥时避免意外的外部请求。
-        return bool(self.llm_api_key and self.llm_model)
+        # Ollama 可在本地无密钥运行；其余已支持提供商仍必须同时具备模型名与密钥。
+        return bool(self.llm_model and (self.llm_provider == "ollama" or self.llm_api_key))
 
     @property
     def local_embedding_enabled(self) -> bool:

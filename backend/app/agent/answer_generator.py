@@ -9,6 +9,7 @@ from langchain_core.tools import BaseTool
 
 from app.agent.prompt_builder import BASE_SYSTEM_PROMPT, PromptBuilder
 from app.config import Settings
+from app.services.llm_factory import LLMProviderFactory
 
 logger = logging.getLogger(__name__)
 
@@ -85,17 +86,8 @@ class AnswerGenerator:
         """创建生成用的最小权限 DeepAgent，供同步完整回答与流式回答共用。"""
         from deepagents import create_deep_agent
         from deepagents.middleware.filesystem import FilesystemMiddleware
-        from langchain_openai import ChatOpenAI
-
-        model_options = {
-            "model": self.settings.llm_model,
-            "api_key": self.settings.llm_api_key,
-            "temperature": 0.2,
-        }
-        if self.settings.llm_base_url:
-            model_options["base_url"] = self.settings.llm_base_url
         return create_deep_agent(
-            model=ChatOpenAI(**model_options),
+            model=LLMProviderFactory.create(self.settings, temperature=0.2),
             tools=list(tools),
             subagents=[],
             middleware=[FilesystemMiddleware(tools=["read_file"])],
