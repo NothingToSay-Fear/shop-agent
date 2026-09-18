@@ -353,7 +353,7 @@ python -m pytest tests/test_evaluation_suite.py tests/test_evaluation_framework.
 - `AUTH_TOKEN_TTL_DAYS` 控制本地登录令牌有效期，默认 `7`；修改后新签发令牌按新期限生效。
 - `USER_MEMORY_FOCUS_DIRECTION_TTL_DAYS` 控制“近期关注方向”未明确指定有效期时的默认保留天数，默认 `90`；到期记录不会进入后续回答生成提示词。
 - `USER_MEMORY_MAX_ACTIVE_RECORDS` 控制单个用户可保留的有效长期记忆上限，默认 `50`；达到上限时，用户需先通过“忘记 …”或“清除所有记忆”释放容量。
-- `CONVERSATION_SUMMARY_POLL_SECONDS`（默认 `1`）控制短期状态压缩 Worker 的空闲轮询间隔；`CONVERSATION_SUMMARY_MAX_ATTEMPTS`（默认 `3`）控制任务异常或 Worker 中断后的最大领取次数；`CONVERSATION_SUMMARY_LEASE_SECONDS`（默认 `300`）是 Worker 领取任务后的租约时长，超时任务会被自动回收。`CONVERSATION_MEMORY_TOKEN_BUDGET`（默认 `6000`）是会话短期状态总预算，`CONVERSATION_MEMORY_COMPACT_THRESHOLD`（默认 `4800`）是触发异步压缩的估算 token 阈值，`CONVERSATION_MEMORY_RECENT_MESSAGE_LIMIT`（默认 `6`）是压缩后最多保留的最近消息数。最近窗口还会受预算约束，避免少量超长消息阻止状态收缩。它们只影响短期状态大小，不会阻塞问答请求。
+- `CONVERSATION_SUMMARY_POLL_SECONDS`（默认 `1`）控制短期状态压缩 Worker 的空闲轮询间隔；`CONVERSATION_SUMMARY_MAX_ATTEMPTS`（默认 `3`）控制任务异常或 Worker 中断后的最大领取次数；`CONVERSATION_SUMMARY_LEASE_SECONDS`（默认 `300`）是 Worker 领取任务后的租约时长，超时任务会被自动回收。`CONVERSATION_MEMORY_TOKEN_BUDGET`（默认 `12000`）是会话短期状态总预算，`CONVERSATION_MEMORY_COMPACT_THRESHOLD`（默认 `9600`）是触发异步压缩的估算 token 阈值，`CONVERSATION_MEMORY_RECENT_MESSAGE_LIMIT`（默认 `6`）是压缩后最多保留的最近消息数。最近窗口还会受预算约束，避免少量超长消息阻止状态收缩。它们只影响短期状态大小，不会阻塞问答请求。
 - `KNOWLEDGE_UPLOAD_DIR` 默认 `/uploads`，由 Docker 映射为宿主机 `uploads/`；上传原件不写入镜像或数据库临时目录。
 - 当前模型适配器采用 OpenAI 兼容协议，因此可配置支持该协议的模型服务地址和模型名称，而不绑定特定厂商；未配置密钥和模型时仅提供受控检索证据，不生成模拟结论。
 
