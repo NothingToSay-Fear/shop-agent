@@ -1,7 +1,7 @@
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -33,7 +33,10 @@ class Settings(BaseSettings):
     conversation_summary_lease_seconds: int = Field(default=300, ge=30, le=3600)
     conversation_memory_token_budget: int = Field(default=12000, ge=1000, le=20000)
     conversation_memory_compact_threshold: int = Field(default=9600, ge=800, le=19000)
-    conversation_memory_recent_message_limit: int = Field(default=6, ge=2, le=12)
+    conversation_memory_recent_message_limit: int = Field(default=10, ge=2, le=12)
+    conversation_memory_turn_text_limit: int = Field(default=2000, ge=400, le=4000)
+    conversation_summary_llm_text_limit: int = Field(default=1200, ge=400, le=2400)
+    conversation_summary_fallback_text_limit: int = Field(default=2400, ge=800, le=4000)
     user_memory_focus_direction_ttl_days: int = Field(default=90, ge=7, le=365)
     user_memory_max_active_records: int = Field(default=50, ge=5, le=500)
     web_search_provider: str = "tavily"
@@ -44,6 +47,14 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:5173"
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    @model_validator(mode="after")
+    def validate_conversation_memory_limits(self) -> "Settings":
+        if self.conversation_memory_compact_threshold >= self.conversation_memory_token_budget:
+            raise ValueError("conversation_memory_compact_threshold must be less than conversation_memory_token_budget")
+        if self.conversation_summary_llm_text_limit > self.conversation_summary_fallback_text_limit:
+            raise ValueError("conversation_summary_llm_text_limit must not exceed conversation_summary_fallback_text_limit")
+        return self
 
     @property
     def cors_origin_list(self) -> list[str]:

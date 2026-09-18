@@ -72,6 +72,17 @@ def test_invalid_llm_json_uses_bounded_deterministic_fallback() -> None:
     assert "618" in payload.summary_text
 
 
+def test_summary_limits_distinguish_llm_and_fallback_paths() -> None:
+    long_text = "结论" * 2000
+
+    payload = _parse_summary_payload(f'{{"summary_text":"{long_text}"}}', 1200)
+    fallback = _fallback_summary(long_text, [], 2400)
+
+    assert payload is not None
+    assert len(payload.summary_text) == 1201  # 截断标记占用一个字符。
+    assert len(fallback.summary_text) == 2401
+
+
 def test_token_estimate_grows_with_short_term_state() -> None:
     """压缩任务按状态体量而不是回答轮次触发。"""
     short = _estimate_state_tokens("", [ConversationMemoryTurn("user", "GMV", "message-1")])
