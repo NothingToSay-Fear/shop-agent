@@ -33,6 +33,7 @@ def build_metric_rag_tool(
         end_date: date | None = None,
         metric_codes: list[str] | None = None,
         query_periods: list[dict[str, str]] | None = None,
+        dimensions: list[str] | None = None,
         capability_notes: list[str] | None = None,
     ) -> str:
         """查询经营指标。日期条件只能由系统确认后作为结构化参数传入；工具只执行经审核的只读 SQL 模板。"""
@@ -40,6 +41,8 @@ def build_metric_rag_tool(
         input_summary = f"问题长度：{len(question.strip())} 个字符"
         if metric_codes:
             input_summary += f"；数据查询计划指标={','.join(metric_codes)}"
+        if dimensions:
+            input_summary += f"；下钻维度={','.join(dimensions)}"
         specification = get_tool_specification("query_metric_rag")
         if not tracker.reserve_tool_call("query_metric_rag", specification.max_calls_per_run):
             tracker.record_tool_call(
@@ -61,6 +64,7 @@ def build_metric_rag_tool(
                         question,
                         constraints=constraints,
                         query_plan=_query_plan_from_periods(query_periods),
+                        dimensions=tuple(dimensions or ()),
                         capability_notes=tuple(capability_notes or ()),
                     )
                 else:

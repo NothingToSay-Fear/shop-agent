@@ -1,4 +1,4 @@
-"""数据查询子 Agent 使用的确定性规划规则与计划数据结构。"""
+"""数据查询子 Agent 使用的确定性计划规则与计划数据结构。"""
 
 from __future__ import annotations
 
@@ -6,8 +6,11 @@ from dataclasses import dataclass
 from typing import Mapping
 
 
-_PRODUCT_MARKERS = ("商品", "单品", "SKU", "SPU", "货品")
+_PRODUCT_MARKERS = ("商品", "单品", "sku", "spu", "货品")
+_CHANNEL_MARKERS = ("渠道", "来源", "流量来源")
+_DIMENSION_COMPARE_MARKERS = ("各", "每个", "分别", "排名", "排行", "top", "最高", "最低", "高退款")
 _REFUND_MARKERS = ("退款", "退货", "售后")
+_REFUND_DETAIL_MARKERS = ("原因", "规则")
 _CAUSAL_MARKERS = ("为什么", "为何", "原因", "归因", "下滑原因", "下降原因")
 
 
@@ -26,7 +29,7 @@ class DataQueryPlan:
         if not self.unsupported_requirements:
             return ()
         return (
-            "当前受控经营数据仅提供 daily_metrics 的按天聚合指标，"
+            "当前受控经营数据支持 daily_metrics 的按天、渠道、商品/SKU 聚合；"
             + "；".join(self.unsupported_requirements)
             + "。这不是要求用户手工补数，而是当前尚未接入对应明细数据源。",
         )
@@ -72,24 +75,38 @@ def build_data_query_plan(
     allow_metric_drilldown = _allows_metric_drilldown(constraints, lowered)
     if allow_metric_drilldown:
         metric_codes = _expand_causal_driver_metrics(metric_codes, driver_graph or {})
-    wants_product_refunds = any(marker.lower() in lowered for marker in _PRODUCT_MARKERS) and any(
-        marker in lowered for marker in _REFUND_MARKERS
+
+    dimensions = _requested_dimensions(lowered)
+    unsupported: list[str] = []
+    wants_refund_detail = (
+        "product" in dimensions
+        and any(marker in lowered for marker in _REFUND_MARKERS)
+        and any(marker in lowered for marker in _REFUND_DETAIL_MARKERS)
     )
-    if wants_product_refunds:
-        return DataQueryPlan(
-            metric_codes=metric_codes,
-            periods=periods,
-            dimensions=("product",),
-            unsupported_requirements=(
-                "无法按商品/SKU 排序高退款商品，也无法关联订单退款原因或活动规则",
-            ),
-            allow_metric_drilldown=allow_metric_drilldown,
-        )
+    if wants_refund_detail:
+        unsupported.append("无法关联订单退款原因或活动规则")
+
     return DataQueryPlan(
         metric_codes=metric_codes,
         periods=periods,
+        dimensions=dimensions,
+        unsupported_requirements=tuple(unsupported),
         allow_metric_drilldown=allow_metric_drilldown,
     )
+
+
+def _requested_dimensions(lowered_question: str) -> tuple[str, ...]:
+    """仅将当前表已声明的维度加入计划，不解释用户输入为列名或 SQL。"""
+    dimensions: list[str] = []
+    has_dimension_comparison = any(marker in lowered_question for marker in _DIMENSION_COMPARE_MARKERS)
+    if any(marker in lowered_question for marker in _CHANNEL_MARKERS):
+        dimensions.append("channel")
+    if any(marker in lowered_question for marker in _PRODUCT_MARKERS):
+        dimensions.append("product")
+    if has_dimension_comparison and any(marker in lowered_question for marker in _REFUND_MARKERS):
+        if "product" not in dimensions:
+            dimensions.append("product")
+    return tuple(dimensions)
 
 
 def _allows_metric_drilldown(constraints: Mapping[str, object], lowered_question: str) -> bool:

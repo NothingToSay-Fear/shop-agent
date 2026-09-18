@@ -7,7 +7,13 @@ import pytest
 from app.database import SessionLocal
 from app.models import Conversation, User
 from app.services.conversation_tasks import prepare_conversation_task
-from app.services.metric_rag import MetricQueryConstraints, query_metrics_for_question
+from app.services.metric_rag import (
+    MetricQueryConstraints,
+    MetricQueryPlan,
+    MetricQueryUnit,
+    query_metrics_for_codes,
+    query_metrics_for_question,
+)
 from app.services.temporal_interpreter import TemporalResolution
 
 # SessionLocal 复用 asyncpg 连接池；本模块的数据库集成测试必须共用同一事件循环。
@@ -151,3 +157,22 @@ async def test_today_metric_query_uses_one_latest_business_day_against_real_data
         ]
         assert "2026-09-15 至 2026-09-15" in context.text
         await session.rollback()
+
+
+async def test_dimension_query_uses_existing_product_rows_and_computes_refund_rate_per_sku() -> None:
+    """商品/SKU 下钻必须基于 daily_metrics 与 products 的真实关联，而非回复层猜测。"""
+    async with SessionLocal() as session:
+        context = await query_metrics_for_codes(
+            session,
+            ("refund_rate",),
+            "列出 618 期间高退款商品",
+            query_plan=MetricQueryPlan(
+                (MetricQueryUnit("618", date(2026, 6, 1), date(2026, 6, 18)),)
+            ),
+            dimensions=("product",),
+        )
+
+        assert context is not None
+        assert "【按商品/SKU拆分】" in context.text
+        assert "SKU：DEMO-" in context.text
+        assert "退款率：" in context.text

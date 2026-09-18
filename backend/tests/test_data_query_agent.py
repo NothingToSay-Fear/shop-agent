@@ -70,6 +70,16 @@ def test_product_refund_request_reports_missing_detail_source_without_dropping_a
     assert "daily_metrics" in plan.capability_notes[0]
 
 
+def test_existing_channel_and_product_dimensions_are_added_to_the_controlled_plan() -> None:
+    plan = build_data_query_plan(
+        {"metrics": ["paid_gmv", "refund_rate"]},
+        "对比各渠道和各 SKU 的 GMV、退款率排名",
+    )
+
+    assert plan.dimensions == ("channel", "product")
+    assert plan.unsupported_requirements == ()
+
+
 @pytest.mark.asyncio
 async def test_data_query_agent_executes_only_the_structured_metric_plan() -> None:
     class _MetricTool:
@@ -82,6 +92,17 @@ async def test_data_query_agent_executes_only_the_structured_metric_plan() -> No
     agent = DataQueryAgent(
         {
             "metrics": ["paid_gmv", "conversion_rate", "refund_rate"],
+            "data_query_plan": {
+                "metric_codes": ["paid_gmv", "conversion_rate", "refund_rate"],
+                "periods": [
+                    {
+                        "label": "618",
+                        "start_date": "2026-06-01",
+                        "end_date": "2026-06-18",
+                    }
+                ],
+                "dimensions": ["channel"],
+            },
             "periods": [
                 {
                     "label": "618",
@@ -106,6 +127,7 @@ async def test_data_query_agent_executes_only_the_structured_metric_plan() -> No
     assert tool.payload["query_periods"] == [
         {"label": "618", "start_date": "2026-06-01", "end_date": "2026-06-18"}
     ]
+    assert tool.payload["dimensions"] == ["channel"]
 
 
 def test_plain_comparison_does_not_authorize_driver_drilldown() -> None:

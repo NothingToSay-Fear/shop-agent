@@ -69,6 +69,8 @@ class DataQueryAgent:
                 {"label": label, "start_date": start_date, "end_date": end_date}
                 for label, start_date, end_date in plan.periods
             ]
+        if plan.dimensions:
+            payload["dimensions"] = list(plan.dimensions)
         if plan.capability_notes:
             payload["capability_notes"] = list(plan.capability_notes)
         await metric_tool.ainvoke(payload)
@@ -82,12 +84,6 @@ class DataQueryAgent:
         plan = self.plan()
         if tracker.metric_context is None:
             return DataQueryObservation(False, "未获得可用经营指标，不能继续做数据归因")
-        if plan.unsupported_requirements:
-            return DataQueryObservation(
-                False,
-                "当前请求依赖尚未接入的明细能力",
-                blocked_by_capability=plan.unsupported_requirements,
-            )
         if not plan.allow_metric_drilldown:
             return DataQueryObservation(
                 True,

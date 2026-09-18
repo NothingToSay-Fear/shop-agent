@@ -5,12 +5,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, timedelta
 from decimal import Decimal
+from typing import Mapping
 
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings, get_settings
-from app.models import DailyMetric, MetricDefinition
+from app.models import DailyMetric, MetricDefinition, Product
 from app.services.business_dates import current_business_date
 from app.services.local_embeddings import embed_texts
 from app.services.activity_periods import ACTIVITY_PERIODS, resolve_activity_periods
@@ -23,6 +24,8 @@ from app.services.query_expansion import (
 )
 
 MAX_QUERY_UNITS = 4
+MAX_DIMENSION_ROWS = 30
+SUPPORTED_QUERY_DIMENSIONS = frozenset({"channel", "product"})
 
 # 每个模板均为只读聚合查询，只允许固定的日期和数据源绑定参数。
 SUM_PAID_GMV_SQL = """
@@ -179,6 +182,28 @@ class MetricQueryPlan:
     units: tuple[MetricQueryUnit, ...]
 
 
+@dataclass(frozen=True)
+class DimensionFilters:
+    """由库中真实维度值解析出的受控筛选条件。"""
+
+    channels: tuple[str, ...] = ()
+    product_ids: tuple[str, ...] = ()
+    product_labels: tuple[str, ...] = ()
+
+    @property
+    def active(self) -> bool:
+        return bool(self.channels or self.product_ids)
+
+    @property
+    def display(self) -> tuple[str, ...]:
+        parts: list[str] = []
+        if self.channels:
+            parts.append("渠道=" + "、".join(self.channels))
+        if self.product_ids:
+            parts.append("商品/SKU=" + "、".join(self.product_labels))
+        return tuple(parts)
+
+
 class MetricQueryPlanError(ValueError):
     """用户表达的时间单元超出当前受控计划上限。"""
 
@@ -316,7 +341,7 @@ async def query_metrics_for_question(
 
     requested_definitions = [definition_map[code] for code in requested_codes]
     lines = ["数据来源：经营数据。"]
-    for unit, values in zip(plan.units, values_by_unit, strict=True):
+    for unit_index, (unit, values) in enumerate(zip(plan.units, values_by_unit, strict=True)):
         lines.append(f"【{unit.label}：{unit.start_date} 至 {unit.end_date}】")
         for definition in requested_definitions:
             value = values.get(definition.metric_code, 0.0)
@@ -375,6 +400,7 @@ async def query_metrics_for_codes(
     settings: Settings | None = None,
     constraints: MetricQueryConstraints | None = None,
     query_plan: MetricQueryPlan | None = None,
+    dimensions: tuple[str, ...] = (),
     capability_notes: tuple[str, ...] = (),
 ) -> MetricQueryContext | None:
     """按数据查询计划指定的指标执行，而不是再次对指标定义做 RAG 截断。"""
@@ -398,29 +424,66 @@ async def query_metrics_for_codes(
         plan = MetricQueryPlan((MetricQueryUnit("当前查询范围", *fallback_period),))
 
     resolved_codes = _resolve_dependencies(available_codes, definition_map)
+    selected_dimensions = _validate_dimensions(dimensions)
+    dimension_filters = await _resolve_dimension_filters(session, question)
     values_by_unit: list[dict[str, float]] = []
+    dimension_values_by_unit: list[list[tuple[str, dict[str, float]]]] = []
     for unit in plan.units:
         values: dict[str, float] = {}
         for metric_code in resolved_codes:
             definition = definition_map[metric_code]
             if definition.query_template:
-                values[metric_code] = await _execute_controlled_template(
-                    session, definition.query_template, unit.start_date, unit.end_date
-                )
+                if dimension_filters.active:
+                    values[metric_code] = await _query_filtered_metric_value(
+                        session,
+                        metric_code,
+                        unit.start_date,
+                        unit.end_date,
+                        dimension_filters,
+                    )
+                else:
+                    values[metric_code] = await _execute_controlled_template(
+                        session, definition.query_template, unit.start_date, unit.end_date
+                    )
         for metric_code in resolved_codes:
             definition = definition_map[metric_code]
             if definition.calculation_formula:
                 values[metric_code] = _calculate_metric(definition.calculation_formula, values)
         values_by_unit.append(values)
+        if selected_dimensions:
+            dimension_values_by_unit.append(
+                await _query_dimension_values(
+                    session,
+                    resolved_codes,
+                    definition_map,
+                    unit.start_date,
+                    unit.end_date,
+                    selected_dimensions,
+                    available_codes,
+                    dimension_filters,
+                )
+            )
 
     lines = ["数据来源：经营数据（按任务数据查询计划执行）"]
     for note in capability_notes:
         lines.append(f"【数据能力边界】{note}")
-    for unit, values in zip(plan.units, values_by_unit, strict=True):
+    if dimension_filters.active:
+        lines.append("【维度筛选】" + "；".join(dimension_filters.display))
+    for unit_index, (unit, values) in enumerate(zip(plan.units, values_by_unit, strict=True)):
         lines.append(f"【{unit.label}：{unit.start_date} 至 {unit.end_date}】")
         for metric_code in available_codes:
             definition = definition_map[metric_code]
             lines.append(f"{definition.name}：{_format_value(metric_code, values[metric_code])}")
+        if selected_dimensions:
+            lines.append(f"【按{_dimension_title(selected_dimensions)}拆分】")
+            dimension_values = dimension_values_by_unit[unit_index]
+            for label, dimension_values_item in dimension_values:
+                rendered = "；".join(
+                    f"{definition_map[metric_code].name}："
+                    f"{_format_value(metric_code, dimension_values_item[metric_code])}"
+                    for metric_code in available_codes
+                )
+                lines.append(f"- {label}：{rendered}")
     if len(plan.units) > 1:
         lines.append("【区间对比】")
         baseline_unit, baseline_values = plan.units[0], values_by_unit[0]
@@ -634,6 +697,165 @@ async def _execute_controlled_template(
         {"source": "demo", "start_date": start_date, "end_date": end_date},
     )
     return float(result or Decimal("0"))
+
+
+def _validate_dimensions(dimensions: tuple[str, ...]) -> tuple[str, ...]:
+    """维度是受控枚举，而非用户可指定的列名。"""
+    selected = tuple(dict.fromkeys(dimensions))
+    invalid = set(selected) - SUPPORTED_QUERY_DIMENSIONS
+    if invalid:
+        raise MetricQueryPlanError("数据查询计划包含未登记的下钻维度")
+    return selected
+
+
+async def _resolve_dimension_filters(session: AsyncSession, question: str) -> DimensionFilters:
+    """只用数据库中已存在的渠道名、商品名或 SKU 识别精确筛选，不维护业务值硬编码。"""
+    normalized_question = _normalize_dimension_text(question)
+    if not normalized_question:
+        return DimensionFilters()
+
+    channels = tuple(
+        item
+        for item in await session.scalars(
+            select(DailyMetric.channel)
+            .where(DailyMetric.source == "demo")
+            .distinct()
+        )
+        if _value_appears_in_question(item, normalized_question)
+    )
+    products = list(
+        (await session.execute(select(Product.id, Product.sku, Product.name).where(Product.source == "demo"))).all()
+    )
+    matched_products = [
+        product
+        for product in products
+        if _value_appears_in_question(product.sku, normalized_question)
+        or _value_appears_in_question(product.name, normalized_question)
+    ]
+    return DimensionFilters(
+        channels=channels,
+        product_ids=tuple(product.id for product in matched_products),
+        product_labels=tuple(f"{product.name}（{product.sku}）" for product in matched_products),
+    )
+
+
+def _normalize_dimension_text(value: str) -> str:
+    return "".join(character for character in value.lower() if character.isalnum() or "\u4e00" <= character <= "\u9fff")
+
+
+def _value_appears_in_question(value: str, normalized_question: str) -> bool:
+    normalized_value = _normalize_dimension_text(value)
+    return len(normalized_value) >= 4 and normalized_value in normalized_question
+
+
+def _base_metric_column(metric_code: str) -> object:
+    columns = {
+        "paid_gmv": DailyMetric.paid_gmv,
+        "paid_order_count": DailyMetric.paid_order_count,
+        "visitor_count": DailyMetric.visitor_count,
+        "refund_order_count": DailyMetric.refund_order_count,
+    }
+    column = columns.get(metric_code)
+    if column is None:
+        raise MetricQueryPlanError("下钻查询包含未登记的基础指标")
+    return column
+
+
+def _apply_dimension_filters(statement: object, dimension_filters: DimensionFilters) -> object:
+    if dimension_filters.channels:
+        statement = statement.where(DailyMetric.channel.in_(dimension_filters.channels))  # type: ignore[attr-defined]
+    if dimension_filters.product_ids:
+        statement = statement.where(DailyMetric.product_id.in_(dimension_filters.product_ids))  # type: ignore[attr-defined]
+    return statement
+
+
+async def _query_filtered_metric_value(
+    session: AsyncSession,
+    metric_code: str,
+    start_date: date,
+    end_date: date,
+    dimension_filters: DimensionFilters,
+) -> float:
+    column = _base_metric_column(metric_code)
+    statement = select(func.coalesce(func.sum(column), 0)).where(
+        DailyMetric.source == "demo",
+        DailyMetric.metric_date.between(start_date, end_date),
+    )
+    statement = _apply_dimension_filters(statement, dimension_filters)
+    result = await session.scalar(statement)  # type: ignore[arg-type]
+    return float(result or Decimal("0"))
+
+
+async def _query_dimension_values(
+    session: AsyncSession,
+    resolved_codes: list[str],
+    definition_map: dict[str, MetricDefinition],
+    start_date: date,
+    end_date: date,
+    dimensions: tuple[str, ...],
+    requested_codes: list[str],
+    dimension_filters: DimensionFilters,
+) -> list[tuple[str, dict[str, float]]]:
+    """按已登记维度聚合，不将用户文本、字段名或 SQL 拼入查询。"""
+    base_codes = [
+        code for code in resolved_codes if definition_map[code].query_template is not None
+    ]
+    selected_columns = []
+    group_columns = []
+    requires_product_join = "product" in dimensions
+    if "channel" in dimensions:
+        selected_columns.append(DailyMetric.channel.label("channel"))
+        group_columns.append(DailyMetric.channel)
+    if requires_product_join:
+        selected_columns.extend(
+            (Product.id.label("product_id"), Product.sku.label("product_sku"), Product.name.label("product_name"))
+        )
+        group_columns.extend((Product.id, Product.sku, Product.name))
+
+    aggregates = [func.coalesce(func.sum(_base_metric_column(code)), 0).label(code) for code in base_codes]
+    statement = select(*selected_columns, *aggregates).where(
+        DailyMetric.source == "demo",
+        DailyMetric.metric_date.between(start_date, end_date),
+    )
+    statement = _apply_dimension_filters(statement, dimension_filters)
+    if requires_product_join:
+        statement = statement.join(Product, Product.id == DailyMetric.product_id)
+    statement = statement.group_by(*group_columns)
+    rows = (await session.execute(statement)).mappings().all()
+
+    values_by_label: list[tuple[str, dict[str, float]]] = []
+    for row in rows:
+        values = {code: float(row[code] or Decimal("0")) for code in base_codes}
+        for code in resolved_codes:
+            definition = definition_map[code]
+            if definition.calculation_formula:
+                values[code] = _calculate_metric(definition.calculation_formula, values)
+        values_by_label.append((_dimension_label(dimensions, row), values))
+
+    primary_metric = requested_codes[0]
+    values_by_label.sort(
+        key=lambda item: (-item[1].get(primary_metric, 0.0), item[0])
+    )
+    if len(values_by_label) > MAX_DIMENSION_ROWS:
+        values_by_label = values_by_label[:MAX_DIMENSION_ROWS]
+    return values_by_label
+
+
+def _dimension_title(dimensions: tuple[str, ...]) -> str:
+    labels = {"channel": "渠道", "product": "商品/SKU"}
+    return " × ".join(labels[dimension] for dimension in dimensions)
+
+
+def _dimension_label(dimensions: tuple[str, ...], row: object) -> str:
+    values = row  # SQLAlchemy RowMapping supports keyed access but is intentionally not exposed above.
+    labels: list[str] = []
+    if "channel" in dimensions:
+        labels.append(f"渠道：{values['channel']}")  # type: ignore[index]
+    if "product" in dimensions:
+        labels.append(
+            f"商品：{values['product_name']}（SKU：{values['product_sku']}）"  # type: ignore[index]
+        )
+    return "；".join(labels)
 
 
 def _calculate_metric(formula: str, values: dict[str, float]) -> float:
