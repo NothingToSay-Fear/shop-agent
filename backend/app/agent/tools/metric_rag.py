@@ -43,6 +43,21 @@ def build_metric_rag_tool(
             input_summary += f"；数据查询计划指标={','.join(metric_codes)}"
         if dimensions:
             input_summary += f"；下钻维度={','.join(dimensions)}"
+        diagnostic_input = {
+            "metric_codes": list(metric_codes or ()),
+            "start_date": start_date.isoformat() if start_date else None,
+            "end_date": end_date.isoformat() if end_date else None,
+            "query_periods": [
+                {
+                    "start_date": item.get("start_date"),
+                    "end_date": item.get("end_date"),
+                }
+                for item in (query_periods or ())
+                if isinstance(item, dict)
+            ],
+            "dimensions": list(dimensions or ()),
+            "capability_note_count": len(capability_notes or ()),
+        }
         specification = get_tool_specification("query_metric_rag")
         if not tracker.reserve_tool_call("query_metric_rag", specification.max_calls_per_run):
             tracker.record_tool_call(
@@ -111,6 +126,7 @@ def build_metric_rag_tool(
                 status="empty",
                 started_at=started_at,
                 error_code="metric_query_plan_invalid",
+                diagnostic_input=diagnostic_input,
             )
             return str(error)
         except Exception:
@@ -121,6 +137,7 @@ def build_metric_rag_tool(
                 status="failed",
                 started_at=started_at,
                 error_code="metric_rag_failed",
+                diagnostic_input=diagnostic_input,
             )
             raise
 

@@ -64,7 +64,7 @@ class AgentWorkflow:
         plan_controller: PlanExecutionController | None = None,
     ) -> WorkflowResult:
         """先完成并校验执行计划，再允许模型基于受控结果组织回答。"""
-        tracker = AgentToolTracker()
+        tracker = AgentToolTracker(run_id=plan_controller.run_id if plan_controller else None)
         active_context = conversation_context or ConversationContextSnapshot()
         active_memory_context = user_memory_context or UserMemoryContext()
         active_summary_context = conversation_summary_context or ConversationSummaryContext()

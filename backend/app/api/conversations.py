@@ -41,6 +41,7 @@ from app.services.agent_audit import (
     fail_run,
     log_run_completed,
     log_run_failed,
+    log_run_started,
     persist_tool_calls,
     update_run_route,
 )
@@ -271,7 +272,13 @@ async def create_message(
     )
     session.add(run)
     await session.commit()
-    plan_controller = PlanExecutionController(session, task_plan)
+    log_run_started(
+        run,
+        task_id=task_turn.task.id,
+        plan_id=task_plan.id,
+        route_mode=delegation_plan.route_mode,
+    )
+    plan_controller = PlanExecutionController(session, task_plan, run_id=run.id)
 
     agent = OperationAgent()
     started_at = perf_counter()
@@ -375,7 +382,7 @@ async def create_message(
                     },
                 )
             yield _event("done", {"message_id": agent_message.id, "run_id": run.id})
-        except Exception:
+        except Exception as error:
             await session.rollback()
             await fail_task_plan(session, task_plan, "Agent 执行异常")
             if agent.tool_tracker.route is not None:
@@ -385,8 +392,8 @@ async def create_message(
             # 失败前已执行的工具同样需要审计；此时尚无 Agent 消息，关联本轮用户消息。
             persist_tool_calls(session, run, user_message.id, agent.tool_tracker.tool_calls)
             await session.commit()
-            log_run_failed(run)
-            yield _event("error", {"message": "生成回答失败，请稍后重试。"})
+            log_run_failed(run, exception_type=type(error).__name__)
+            yield _event("error", {"message": "生成回答失败，请稍后重试。", "run_id": run.id})
 
     return StreamingResponse(
         event_stream(), media_type="text/event-stream", headers={"Cache-Control": "no-cache"}
@@ -513,12 +520,14 @@ async def _task_clarification_event_stream(
     )
     session.add(agent_message)
     await session.flush()
+    log_run_started(run, route_mode="task_clarification")
     run.agent_message_id = agent_message.id
     complete_run(run, response, AgentToolTracker(), perf_counter())
     await session.commit()
+    log_run_completed(run, AgentToolTracker())
     yield _event("status", {"content": "正在等待补充当前任务所需条件…", "phase": "task"})
     yield _event("chunk", {"content": response})
-    yield _event("done", {"message_id": agent_message.id})
+    yield _event("done", {"message_id": agent_message.id, "run_id": run.id})
 
 
 def _event(event: str, payload: dict[str, object]) -> str:

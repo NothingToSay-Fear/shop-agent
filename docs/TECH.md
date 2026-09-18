@@ -387,6 +387,23 @@ API 容器启动时会先执行数据库迁移，再运行 `python -m app.seed`�
 
 ## 7. 运行日志与排查
 
+Agent 执行采用轻量级后端日志排障，不依赖 Prometheus、Grafana 或额外监控容器。前端无需新增诊断页面：正常回答的 SSE `done` 事件已包含 `message_id` 与 `run_id`；失败 SSE `error` 事件也会带 `run_id`。后端日志以 `key=value` 输出，并且不会记录用户原文、完整回答、SQL 或工具完整结果。
+
+一次 Agent 运行会依次输出 `agent_run_started`、`plan_step_started` / `plan_step_finished`、`tool_call_finished` 与 `agent_run_completed` 或 `agent_run_failed`。所有执行链路均以 `run_id` 为中心；开始与结束日志还带有 `conversation_id`、`user_message_id` 和可用时的 `agent_message_id`。工具失败时，`tool_call_failed` 会附带白名单化的 `diagnostic_input`：指标工具保留指标编码、起止日期、查询分段日期和维度；知识库及联网工具仅保留问题长度、是否使用预处理查询或搜索提供方。
+
+正常回答可先按前端的 `message_id` 找到运行，再按 `run_id` 查看完整过程：
+
+```powershell
+docker compose logs api | Select-String "agent_message_id=<message-id>"
+docker compose logs api | Select-String "run_id=<run-id>"
+```
+
+没有生成 Agent 消息时，可按前端会话 ID 和发生时间定位：
+
+```powershell
+docker compose logs api | Select-String "conversation_id=<conversation-id>"
+```
+
 使用 `docker compose up -d` 会将服务放入后台，终端不会持续输出日志。使用以下命令查看：
 
 ```powershell

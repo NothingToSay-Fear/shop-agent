@@ -23,6 +23,10 @@ def build_knowledge_rag_tool(
         """检索当前用户已选择参与问答的运营资料。适用于活动规则、玩法、商品资料、SOP、历史方案和复盘事实。必须传入用户原始问题。"""
         started_at = tracker.start_tool_call()
         input_summary = f"问题长度：{len(question.strip())} 个字符；检索范围：当前用户已选择资料"
+        diagnostic_input = {
+            "question_length": len(question.strip()),
+            "has_prepared_queries": prepared_queries is not None,
+        }
         specification = get_tool_specification("query_knowledge_rag")
         if not tracker.reserve_tool_call("query_knowledge_rag", specification.max_calls_per_run):
             tracker.record_tool_call(
@@ -67,6 +71,7 @@ def build_knowledge_rag_tool(
                 status="failed",
                 started_at=started_at,
                 error_code="knowledge_rag_failed",
+                diagnostic_input=diagnostic_input,
             )
             raise
 

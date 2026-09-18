@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+import json
 from dataclasses import dataclass, field
 from time import perf_counter
 
@@ -9,6 +11,9 @@ from app.services.knowledge_rag import KnowledgeQueryContext
 from app.services.metric_rag import MetricQueryContext
 from app.services.intent_router import RetrievalRoute
 from app.services.web_search import WebSearchContext
+
+
+logger = logging.getLogger("uvicorn.error")
 
 
 @dataclass(frozen=True)
@@ -22,6 +27,7 @@ class ToolCallAudit:
     status: str
     duration_ms: int
     error_code: str | None = None
+    diagnostic_input: dict[str, object] = field(default_factory=dict)
 
 
 @dataclass
@@ -34,6 +40,7 @@ class AgentToolTracker:
     web_context: WebSearchContext | None = None
     web_search_miss: bool = False
     route: RetrievalRoute | None = None
+    run_id: str | None = None
     tool_calls: list[ToolCallAudit] = field(default_factory=list)
     tool_invocation_counts: dict[str, int] = field(default_factory=dict)
 
@@ -63,19 +70,40 @@ class AgentToolTracker:
         status: str,
         started_at: float,
         error_code: str | None = None,
+        diagnostic_input: dict[str, object] | None = None,
     ) -> None:
         """追加一条脱敏工具轨迹；该方法同时覆盖模型自行调用工具的场景。"""
-        self.tool_calls.append(
-            ToolCallAudit(
-                tool_name=tool_name,
-                input_summary=input_summary,
-                result_summary=result_summary,
-                reference_ids=reference_ids,
-                status=status,
-                duration_ms=max(0, round((perf_counter() - started_at) * 1000)),
-                error_code=error_code,
-            )
+        audit = ToolCallAudit(
+            tool_name=tool_name,
+            input_summary=input_summary,
+            result_summary=result_summary,
+            reference_ids=reference_ids,
+            status=status,
+            duration_ms=max(0, round((perf_counter() - started_at) * 1000)),
+            error_code=error_code,
+            diagnostic_input=dict(diagnostic_input or {}),
         )
+        self.tool_calls.append(audit)
+        if self.run_id:
+            if audit.status == "failed" or (audit.error_code and audit.diagnostic_input):
+                logger.warning(
+                    "tool_call_failed run_id=%s tool=%s duration_ms=%s error_code=%s diagnostic_input=%s",
+                    self.run_id,
+                    audit.tool_name,
+                    audit.duration_ms,
+                    audit.error_code or "none",
+                    _serialize_diagnostic_input(audit.diagnostic_input),
+                )
+            else:
+                logger.info(
+                    "tool_call_finished run_id=%s tool=%s status=%s duration_ms=%s error_code=%s reference_count=%s",
+                    self.run_id,
+                    audit.tool_name,
+                    audit.status,
+                    audit.duration_ms,
+                    audit.error_code or "none",
+                    len(audit.reference_ids),
+                )
 
     @property
     def reference_ids(self) -> list[str]:
@@ -123,3 +151,8 @@ class AgentToolTracker:
         if misses:
             return "；".join(misses)
         return "本轮尚未检索到相关数据、资料或公开网页来源"
+
+
+def _serialize_diagnostic_input(diagnostic_input: dict[str, object]) -> str:
+    """仅序列化调用方明确提供的脱敏字段，防止错误日志写入原始问题。"""
+    return json.dumps(diagnostic_input, ensure_ascii=False, sort_keys=True, default=str)

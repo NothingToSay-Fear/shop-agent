@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -12,6 +14,9 @@ from app.agent.task_orchestrator import DelegationPlan, MainAgentOrchestrator, P
 from app.agent.tools.tracker import ToolCallAudit
 from app.models import ConversationTask, TaskPlan, TaskPlanStep, TaskPlanStepAttempt
 from app.services.conversation_tasks import TASK_WAITING_CLARIFICATION
+
+
+logger = logging.getLogger("uvicorn.error")
 
 
 @dataclass(frozen=True)
@@ -37,10 +42,21 @@ class PlanExecutionController:
 
     session: AsyncSession
     plan: TaskPlan
+    run_id: str | None = None
 
     async def begin(self, action: ExecutablePlanAction) -> TaskPlanStepAttempt:
         attempt = await start_action(self.session, action)
         await self.session.commit()
+        if self.run_id:
+            logger.info(
+                "plan_step_started run_id=%s plan_id=%s step_id=%s step_key=%s action_type=%s attempt=%s",
+                self.run_id,
+                self.plan.id,
+                action.step_id,
+                action.key,
+                action.action_type,
+                attempt.attempt_number,
+            )
         return attempt
 
     async def finish(
@@ -63,12 +79,30 @@ class PlanExecutionController:
             error_message=error_message,
         )
         await self.session.commit()
+        if self.run_id:
+            logger.info(
+                "plan_step_finished run_id=%s plan_id=%s step_id=%s step_key=%s action_type=%s status=%s error_code=%s",
+                self.run_id,
+                self.plan.id,
+                action.step_id,
+                action.key,
+                action.action_type,
+                status,
+                _safe_error_code(error_message),
+            )
 
     async def append_replan(
         self, actions: tuple[PlannedAction, ...], reason: str
     ) -> list[ExecutablePlanAction]:
         result = await append_replanned_actions(self.session, self.plan, actions, reason)
         await self.session.commit()
+        if self.run_id:
+            logger.info(
+                "plan_replanned run_id=%s plan_id=%s added_actions=%s",
+                self.run_id,
+                self.plan.id,
+                len(result),
+            )
         return result
 
 
@@ -204,6 +238,15 @@ async def complete_task_plan(
         plan.status = "blocked"
         return
     plan.status = "completed" if not any(step.status == "failed" for step in steps) else "failed"
+
+
+def _safe_error_code(error_message: str | None) -> str:
+    """日志只记录稳定错误码，避免未来调用方误将异常原文带入运行日志。"""
+    if not error_message:
+        return "none"
+    if re.fullmatch(r"[a-z0-9_]{1,100}", error_message):
+        return error_message
+    return "step_failed"
 
 
 async def fail_task_plan(session: AsyncSession, plan: TaskPlan, error_message: str) -> None:

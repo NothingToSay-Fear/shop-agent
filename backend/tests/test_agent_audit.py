@@ -5,8 +5,16 @@ import pytest
 from app.agent.tools.tracker import AgentToolTracker
 from app.agent.tools.web_search import build_web_search_tool
 from app.config import Settings
-from app.services.agent_audit import complete_run, create_question_summary, update_run_route
+from app.services.agent_audit import (
+    complete_run,
+    create_question_summary,
+    log_run_completed,
+    log_run_failed,
+    log_run_started,
+    update_run_route,
+)
 from app.services.intent_router import RetrievalRoute
+from app.services.task_plans import _safe_error_code
 
 
 def test_question_summary_does_not_copy_original_question() -> None:
@@ -64,6 +72,55 @@ def test_completed_run_uses_route_and_summary_without_answer_copy() -> None:
     assert run.status == "completed"
     assert answer not in (run.answer_summary or "")
     assert "0 个引用" in (run.answer_summary or "")
+
+
+def test_runtime_logs_are_searchable_by_conversation_message_and_run_ids(caplog: pytest.LogCaptureFixture) -> None:
+    """排障日志只能包含定位 ID、状态和摘要，不能包含用户或回答原文。"""
+    from app.models import AgentRun
+
+    run = AgentRun(
+        id="run-001",
+        conversation_id="conversation-001",
+        user_message_id="user-message-001",
+        agent_message_id="agent-message-001",
+        question_summary="用户运营问题（12 个字符）",
+        status="failed",
+        total_duration_ms=320,
+        error_code="agent_run_failed",
+    )
+    tracker = AgentToolTracker(run_id=run.id)
+    with caplog.at_level("INFO", logger="uvicorn.error"):
+        log_run_started(run, task_id="task-001", plan_id="plan-001", route_mode="metrics")
+        tracker.record_tool_call(
+            tool_name="query_metric_rag",
+            input_summary="问题长度：12 个字符",
+            result_summary="指标查询执行失败",
+            status="failed",
+            started_at=perf_counter(),
+            error_code="metric_rag_failed",
+            diagnostic_input={
+                "metric_codes": ["paid_gmv"],
+                "query_periods": [{"start_date": "2026-06-01", "end_date": "2026-06-18"}],
+            },
+        )
+        log_run_failed(run, exception_type="ConnectionError")
+        log_run_completed(run, tracker)
+
+    output = "\n".join(caplog.messages)
+    assert "conversation_id=conversation-001" in output
+    assert "user_message_id=user-message-001" in output
+    assert "agent_message_id=agent-message-001" in output
+    assert "run_id=run-001" in output
+    assert "tool_call_failed run_id=run-001" in output
+    assert '"metric_codes": ["paid_gmv"]' in output
+    assert '"start_date": "2026-06-01"' in output
+    assert "exception_type=ConnectionError" in output
+
+
+def test_plan_log_rejects_non_code_error_text() -> None:
+    """计划日志不得把未来传入的异常正文作为可检索字段输出。"""
+    assert _safe_error_code("database_unavailable") == "database_unavailable"
+    assert _safe_error_code("连接失败：包含用户输入") == "step_failed"
 
 
 @pytest.mark.asyncio

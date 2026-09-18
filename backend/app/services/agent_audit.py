@@ -92,24 +92,52 @@ async def cleanup_expired_agent_audits(session: AsyncSession) -> int:
 def log_run_completed(run: AgentRun, tracker: AgentToolTracker) -> None:
     """输出可由 Docker 日志检索的 key=value 运行摘要。"""
     logger.info(
-        "agent_run_completed run_id=%s route=%s status=%s duration_ms=%s tool_calls=%s references=%s",
+        "agent_run_completed run_id=%s conversation_id=%s user_message_id=%s agent_message_id=%s route=%s status=%s duration_ms=%s tool_calls=%s references=%s",
         run.id,
+        run.conversation_id,
+        run.user_message_id,
+        run.agent_message_id or "none",
         run.route_mode,
         run.status,
         run.total_duration_ms,
         len(tracker.tool_calls),
-        len(run.reference_ids),
+        len(run.reference_ids or []),
     )
 
 
-def log_run_failed(run: AgentRun) -> None:
+def log_run_started(
+    run: AgentRun,
+    *,
+    task_id: str | None = None,
+    plan_id: str | None = None,
+    route_mode: str | None = None,
+) -> None:
+    """记录可由前端已有会话或消息 ID 检索到的运行入口。"""
+    logger.info(
+        "agent_run_started run_id=%s conversation_id=%s user_message_id=%s task_id=%s plan_id=%s route=%s",
+        run.id,
+        run.conversation_id,
+        run.user_message_id,
+        task_id or "none",
+        plan_id or "none",
+        route_mode or run.route_mode or "unknown",
+    )
+
+
+def log_run_failed(
+    run: AgentRun, *, stage: str = "workflow", exception_type: str | None = None
+) -> None:
     """输出不含原始输入和异常正文的失败摘要。"""
     logger.warning(
-        "agent_run_failed run_id=%s status=%s duration_ms=%s error_code=%s",
+        "agent_run_failed run_id=%s conversation_id=%s user_message_id=%s stage=%s status=%s duration_ms=%s error_code=%s exception_type=%s",
         run.id,
+        run.conversation_id,
+        run.user_message_id,
+        stage,
         run.status,
         run.total_duration_ms,
         run.error_code,
+        exception_type or "none",
     )
 
 
