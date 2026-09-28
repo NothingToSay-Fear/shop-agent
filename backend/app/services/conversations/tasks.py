@@ -16,6 +16,10 @@ from app.services.analytics.metric_analysis_graph import load_metric_analysis_dr
 from app.services.intent_router import RetrievalRoute
 from app.services.conversations.task_interpreter import TaskRelationshipDecision, interpret_task_relationship
 from app.services.conversations.temporal_interpreter import TemporalResolution, resolve_temporal_intent
+from app.services.conversations.task_intent_classifier import (
+    TaskTypeClassification,
+    classify_task_type,
+)
 
 TASK_WAITING_CLARIFICATION = "waiting_clarification"
 TASK_READY = "ready"
@@ -213,7 +217,8 @@ async def _create_new_task(
     question: str,
     temporal_resolution: TemporalResolution,
 ) -> ConversationTaskTurn:
-    task_type = _infer_task_type(question)
+    classification = await _infer_task_type(question)
+    task_type = classification.task_type
     constraints = _merge_constraints({}, question, temporal_resolution, task_type)
     constraints = await _attach_data_query_plan(session, task_type, constraints, question)
     pending_questions = _pending_questions(constraints, temporal_resolution)
@@ -228,6 +233,7 @@ async def _create_new_task(
             "supplements": [],
             "temporal_resolution": _temporal_audit(temporal_resolution),
             "resolved_periods": list(constraints.get("periods", [])),
+            "intent_classification": classification.as_dict(),
         },
         effective_constraints=constraints,
         pending_questions=pending_questions,
@@ -250,7 +256,8 @@ async def _merge_into_existing_task(
 ) -> ConversationTaskTurn:
     """continue/revise 只更新明确字段，未提及的已确认约束永远保留。"""
     frame = dict(task.task_frame or {})
-    task.task_type = _refine_task_type(task.task_type, question)
+    classification = await _infer_task_type(question)
+    task.task_type = _refine_task_type(task.task_type, classification.task_type, question)
     if task.task_type == TASK_HYBRID_ANALYSIS:
         # 因果追问不能继续沿用上一轮纯指标对比的 metrics 路由。
         task.route_mode = "hybrid"
@@ -272,6 +279,7 @@ async def _merge_into_existing_task(
     frame["resolved_periods"] = list(constraints.get("periods", []))
     frame["temporal_resolution"] = _temporal_audit(temporal_resolution)
     frame.pop("time_clarification", None)
+    frame["intent_classification"] = classification.as_dict()
     if pending_questions:
         frame["time_clarification"] = pending_questions[0]
     task.task_frame = frame
@@ -541,16 +549,29 @@ async def _latest_task(
     )
 
 
-def _infer_task_type(question: str) -> str:
+async def _infer_task_type(question: str) -> TaskTypeClassification:
+    """先执行不可妥协的规则护栏，再以模板向量补足开放表达。"""
+    hard_rule = _high_confidence_task_type(question)
+    if hard_rule is not None:
+        return TaskTypeClassification(hard_rule, 1.0, False, "hard_rule")
+    return await classify_task_type(question, _rule_task_type(question))
+
+
+def _high_confidence_task_type(question: str) -> str | None:
+    """指标归因与显式指标对比会决定受控数据计划，禁止被语义分类覆盖。"""
     lowered = question.lower()
     has_metric = any(alias in lowered for _, aliases in _METRIC_MARKERS for alias in aliases)
-    # “为什么 GMV 比上周低”既含比较，也要求解释变化。归因意图优先于纯对比。
     if any(marker in lowered for marker in _CAUSAL_MARKERS) and has_metric:
         return TASK_HYBRID_ANALYSIS
-    if any(alias in lowered for _, aliases in _METRIC_MARKERS for alias in aliases) and any(
-        marker in lowered for marker in _COMPARISON_MARKERS
-    ):
+    if has_metric and any(marker in lowered for marker in _COMPARISON_MARKERS):
         return TASK_METRIC_COMPARISON
+    return None
+
+
+def _rule_task_type(question: str) -> str:
+    """向量服务不可用或置信度不足时使用的确定性兼容策略。"""
+    lowered = question.lower()
+    has_metric = any(alias in lowered for _, aliases in _METRIC_MARKERS for alias in aliases)
     if any(marker in lowered for marker in ("复盘", "归因", "效果评估")):
         return TASK_REVIEW
     if any(marker in lowered for marker in ("分析", "建议", "优化")) and (
@@ -563,9 +584,8 @@ def _infer_task_type(question: str) -> str:
     return TASK_METRIC_QUERY
 
 
-def _refine_task_type(current_task_type: str, question: str) -> str:
+def _refine_task_type(current_task_type: str, inferred_task_type: str, question: str) -> str:
     """允许同一会话中的“为什么”追问将查询/对比任务升级为归因任务。"""
-    inferred_task_type = _infer_task_type(question)
     if current_task_type == TASK_REVIEW or inferred_task_type == TASK_REVIEW:
         return TASK_REVIEW
     if inferred_task_type == TASK_HYBRID_ANALYSIS or (
